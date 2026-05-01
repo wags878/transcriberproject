@@ -1,0 +1,89 @@
+# CPU-only image. Primary build for this project.
+# Built and run by the default `docker compose up -d`.
+#
+# Pinned to slim-bookworm (Debian 12) rather than the floating slim tag
+# (currently Debian 13). PyAV 11 — pinned via faster-whisper 1.0.0 / whisperx
+# 3.2.0 — uses FFmpeg 5.x APIs (AVFrame.channel_layout, AVFrame.channels)
+# that were removed in FFmpeg 7.x. Bookworm ships FFmpeg 5; trixie ships 7,
+# which breaks the source build. See docs/BLOCKERS.md B-003.
+FROM python:3.11-slim-bookworm AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# System deps:
+#   - ffmpeg: audio decode/transcode (whisperx needs it)
+#   - libsndfile1: pyannote.audio audio loading
+#   - libgomp1: OpenMP runtime used by torch / ctranslate2 on CPU
+#   - tini: clean PID 1 for SIGTERM handling
+#   - curl: container HEALTHCHECK
+#   - pkg-config + libav*-dev: safety net in case any pip dep needs to source-build
+#     against ffmpeg headers (e.g. PyAV when no wheel is available for this combo).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        libgomp1 \
+        tini \
+        curl \
+        build-essential \
+        pkg-config \
+        libavcodec-dev \
+        libavformat-dev \
+        libavdevice-dev \
+        libavfilter-dev \
+        libavutil-dev \
+        libswresample-dev \
+        libswscale-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Non-root runtime user. UID/GID 1000 keeps volume permissions sane on most hosts.
+RUN groupadd --gid 1000 app \
+ && useradd --uid 1000 --gid app --create-home --shell /bin/bash app
+
+WORKDIR /app
+
+# Install Python deps in a dedicated step so layer caching survives app code edits.
+COPY requirements.txt ./
+COPY docker/shim ./_shim
+
+# Install order:
+#   1. Upgrade pip.
+#   2. Install the local `lightning` shim (declares lightning>=2.0.1, depends on
+#      pytorch-lightning). This satisfies pyannote.audio's metadata constraint
+#      without needing the quarantined PyPI `lightning` package — see
+#      docs/BLOCKERS.md B-003.
+#   3. Install requirements.txt — pyannote.audio sees lightning is already
+#      installed and skips trying to fetch the quarantined package.
+RUN pip install --upgrade pip \
+ && pip install ./_shim \
+ && pip install -r requirements.txt \
+ && rm -rf ./_shim
+
+# Copy app code last to maximize cache hits on the heavy install layer.
+COPY app/ ./app/
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# /data is the mountpoint for the named volumes (models, uploads, outputs).
+RUN mkdir -p /data/models /data/uploads /data/outputs \
+ && chown -R app:app /data /app
+
+USER app
+
+ENV APP_HOST=0.0.0.0 \
+    APP_PORT=8000 \
+    WHISPERX_DEVICE=cpu \
+    WHISPERX_COMPUTE_TYPE=int8 \
+    DATA_DIR=/data \
+    HF_HOME=/data/models/hf
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD curl -fsS http://localhost:8000/v1/health || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "300"]

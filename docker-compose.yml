@@ -1,0 +1,33 @@
+# Default compose file. Builds and runs the CPU image.
+# To use a GPU build, run: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+name: transcribe-svc
+
+services:
+  transcribe-svc:
+    container_name: transcribe-svc
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    image: transcribe-svc:cpu
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Bind to all interfaces; access control is via Tailscale ACLs (Phase 4)
+      # and (when re-enabled) UFW. Operator has UFW off as of 2026-04-30.
+      - "8000:8000"
+    volumes:
+      - models:/data/models
+      - uploads:/data/uploads
+      - outputs:/data/outputs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+volumes:
+  models:
+  uploads:
+  outputs:

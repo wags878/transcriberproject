@@ -1,0 +1,19 @@
+# GPU overlay. NOT used by default. Per operator decision 2026-04-30, the
+# GPU path is dormant — see docs/BLOCKERS.md B-001 and PROJECT_PLAN.md §8 Q2.
+# To opt in (after confirming `nvidia-smi` works inside a container):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+services:
+  transcribe-svc:
+    build:
+      dockerfile: docker/Dockerfile.gpu
+    image: transcribe-svc:gpu
+    environment:
+      WHISPERX_DEVICE: cuda
+      WHISPERX_COMPUTE_TYPE: int8
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

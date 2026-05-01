@@ -1,0 +1,51 @@
+# Secrets
+.env
+.env.local
+*.token
+tokens.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Build / packaging
+build/
+dist/
+*.egg
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Runtime data (these are container volumes; don't commit local copies)
+/data/
+uploads/
+outputs/
+models/
+audit.jsonl
+
+# Test fixtures that are large or copyrighted (operator will hand-place vetted ones)
+tests/fixtures/*.wav
+tests/fixtures/*.mp3
+tests/fixtures/*.m4a
+tests/fixtures/*.flac
+!tests/fixtures/.gitkeep
+!tests/fixtures/README.md
+
+# Coverage
+.coverage
+htmlcov/
+
+# Docker artifacts
+*.tar

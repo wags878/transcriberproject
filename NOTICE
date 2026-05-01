@@ -1,0 +1,65 @@
+transcribe-svc
+Copyright (c) 2026 The Operator. All rights reserved.
+
+This product incorporates and depends on the following third-party components.
+Each is used under its own license; the project itself remains proprietary
+(see LICENSE).
+
+================================================================================
+WhisperX (https://github.com/m-bain/whisperX)
+License: BSD-2-Clause
+Copyright (c) Max Bain and contributors
+
+Redistributions of the upstream WhisperX source must preserve the upstream
+copyright notice and disclaimer per BSD-2-Clause.
+
+================================================================================
+pyannote.audio (https://github.com/pyannote/pyannote-audio)
+License: MIT
+Copyright (c) Hervé Bredin and contributors
+
+================================================================================
+pyannote/speaker-diarization-community-1 (model weights)
+License: Creative Commons Attribution 4.0 International (CC-BY-4.0)
+Copyright (c) pyannoteAI
+
+This service uses the speaker-diarization-community-1 model provided by
+pyannoteAI. Attribution: "Speaker diarization powered by pyannoteAI's
+speaker-diarization-community-1 model, licensed CC-BY-4.0."
+
+License text: https://creativecommons.org/licenses/by/4.0/
+
+================================================================================
+OpenAI Whisper (https://github.com/openai/whisper)
+License: MIT
+Copyright (c) 2022 OpenAI
+
+================================================================================
+faster-whisper (https://github.com/SYSTRAN/faster-whisper)
+License: MIT
+Copyright (c) SYSTRAN and contributors
+
+================================================================================
+CTranslate2 (https://github.com/OpenNMT/CTranslate2)
+License: MIT
+Copyright (c) 2018-present OpenNMT
+
+================================================================================
+FastAPI (https://github.com/tiangolo/fastapi)
+License: MIT
+Copyright (c) 2018 Sebastián Ramírez
+
+================================================================================
+Uvicorn (https://github.com/encode/uvicorn)
+License: BSD-3-Clause
+Copyright (c) 2017-present, Encode OSS Ltd.
+
+================================================================================
+Pydantic (https://github.com/pydantic/pydantic)
+License: MIT
+Copyright (c) 2017 to present Pydantic Services Inc. and individual contributors.
+
+================================================================================
+ffmpeg (https://ffmpeg.org/)
+License: LGPL/GPL (depending on build)
+Used as an external binary to decode/transcode audio inputs.

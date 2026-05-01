@@ -1,0 +1,42 @@
+# Pinned-ish dependency set for transcribe-svc.
+# Versions chosen to be compatible as of 2026-04. Adjust if upstream incompatibility surfaces.
+
+# Web stack
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# Inference stack
+# whisperx pulls in torch, faster-whisper, ctranslate2, pyannote.audio.
+#
+# Pinned to 3.2.0 because newer whisperx versions (>=3.3) require
+# pyannote-audio>=3.3.2, which depends on the `lightning` PyPI package — and
+# `lightning` is currently quarantined on PyPI (project-status: quarantined,
+# index returns no files). See docs/BLOCKERS.md B-003.
+#
+# Trade-off: whisperx 3.2 → faster-whisper 1.0 → av==11.*. PyAV 11 has no
+# prebuilt wheel for python 3.11 on this platform, so it source-builds. The
+# Dockerfile.cpu installs pkg-config + libav*-dev to make that work.
+whisperx==3.2.0
+
+# Torch / torchaudio pinned to 2.0.x. Pyannote.audio 3.1.1 imports torchaudio
+# and calls torchaudio.set_audio_backend("soundfile") at module load time —
+# removed in torchaudio 2.1+. The 2.0.1/2.0.2 pair is the canonical combo
+# from when pyannote.audio 3.1.1 was released. Bumping requires a newer
+# pyannote.audio, which is blocked on the lightning quarantine (see B-003).
+torch==2.0.1
+torchaudio==2.0.2
+
+# NumPy pinned to <2 because:
+#   - pyannote.audio 3.1.1 uses `np.NaN` (capital N), which was removed in
+#     NumPy 2.0 (must be `np.nan` lower-case now).
+#   - torch 2.0.1's compiled C-extension was built against the NumPy 1.x ABI;
+#     loading it under NumPy 2.x triggers "_ARRAY_API not found" warnings and
+#     subtle breakage.
+# 1.x last release line is 1.26.x. Pin >=1.24 for python 3.11 compatibility.
+numpy>=1.24,<2
+
+# Used directly for filesystem retention task
+python-dateutil==2.9.0

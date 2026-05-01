@@ -1,0 +1,11 @@
+# Explicit CPU overlay. Equivalent to the default docker-compose.yml; provided
+# so commands can be symmetric with the GPU overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+services:
+  transcribe-svc:
+    build:
+      dockerfile: docker/Dockerfile.cpu
+    image: transcribe-svc:cpu
+    environment:
+      WHISPERX_DEVICE: cpu
+      WHISPERX_COMPUTE_TYPE: int8
