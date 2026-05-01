@@ -41,7 +41,7 @@ Content-Type: `multipart/form-data`.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `audio` | file | yes | WAV, MP3, M4A, or FLAC. Max size = `MAX_UPLOAD_MB` (default 500). |
-| `title` | string | no | Used by Phase 2 for output filenames; logged in Phase 1. |
+| `title` | string | no | Used to build the on-disk filename (slugified). Default is `untitled`. |
 | `num_speakers` | int | no | Hint for diarization. Omit to auto-detect. |
 | `language` | string | no | ISO-639-1 code (`en`, `es`, …). Omit to auto-detect. |
 
@@ -65,11 +65,10 @@ Content-Type: `multipart/form-data`.
 | 413 | Upload exceeds `MAX_UPLOAD_MB` |
 | 500 | Pipeline failure (see container logs) |
 
-> **Note on long requests.** Transcription is synchronous in Phase 1 — the
-> response is sent only when processing completes. For a 60-minute recording
-> on the current 7.7 GiB / no-AVX-512 VM, expect the request to stay open for
-> tens of minutes. Set generous client timeouts. (Phase 2 may add async +
-> polling if this becomes fragile.)
+> **Note on long requests.** Transcription is synchronous — the response is
+> sent only when processing completes. On the current 16-vCPU / 15.6 GiB
+> Xeon-Silver-passthrough VM, a 60-minute recording stays open for ~2–3 hours.
+> Set generous client timeouts.
 
 ---
 
@@ -77,14 +76,20 @@ Content-Type: `multipart/form-data`.
 
 Auth: required.
 
-Plain text, UTF-8. Phase 1 format:
-```
-[00:00] SPEAKER_00: Welcome, please come in.
+Plain text, UTF-8. One paragraph per speaker turn (consecutive same-speaker
+WhisperX segments are merged into a single paragraph). Two newlines between
+turns. The `[mm:ss]` prefix is the start time of the turn.
 
-[00:03] SPEAKER_01: Thanks. So this week …
+```
+[00:00] SPEAKER_00: Welcome, please come in. Have a seat — how have you been since last week?
+
+[00:09] SPEAKER_01: Thanks. So this week was hard. I had a really rough Tuesday.
 ```
 
-Phase 2 will switch to paragraph-per-turn merging.
+Files are stored on disk as `<YYYY-MM-DD>_<HHMM>_<title-slug>_<short-uuid>.{txt,json}`
+for human readability when browsing the outputs volume directly. URLs remain
+`/v1/results/{id}/transcript.{txt,json}` and are stable regardless of on-disk
+filename.
 
 `404` if the id is unknown.
 
@@ -101,10 +106,10 @@ Auth: required.
   "duration_seconds": 1834.5,
   "language": "en",
   "speakers_detected": 2,
-  "model": "medium",
+  "model": "large-v3",
   "compute_type": "int8",
   "device": "cpu",
-  "diarization_model": "pyannote/speaker-diarization-community-1",
+  "diarization_model": "pyannote/speaker-diarization-3.1",
   "segments": [
     {
       "start": 0.0,

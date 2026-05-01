@@ -123,3 +123,38 @@ Phase 0 §6 acceptance item (`lscpu | grep -i avx512` returns flags) is now **fu
 
 **Phase 2 readiness:** Phase 1 §6 acceptance is met (was met on 2026-04-30, re-met on the upgraded hardware today). Phase 2 (per `PROJECT_PLAN.md` §6) is **unblocked from the gate side**. Operator decision remaining: pick the `.env` default to ship Phase 2 against (see options listed at the end of this turn's chat).
 
+---
+
+## 2026-05-01 — Phase 2 (complete)
+
+**Goal (per `PROJECT_PLAN.md` §6):** outputs that are pleasant to read and don't pile up forever.
+
+**Done:**
+- **Filename convention** — files on disk now `<YYYY-MM-DD>_<HHMM>_<title-slug>_<short-uuid>.{txt,json}`. URLs stayed `/v1/results/{id}/transcript.{txt,json}` for API stability; a tiny on-disk index in `outputs_dir/.index/{job_id}` resolves URL → on-disk filename. Verified live: `2026-05-01_1731_phase-2-final_5a4b6f67.{txt,json}`.
+- **`.txt` paragraph merging** — `pipeline.render_txt()` now groups consecutive same-speaker WhisperX segments into one paragraph, two newlines between speaker turns, single `[mm:ss]` prefix per turn (start time of the turn). The Phase 1 `short_two_speaker` smoke went from ~14 segment-lines to 6 readable paragraphs.
+- **Retention** — `storage.cleanup_old_files()` walks `uploads_dir` and `outputs_dir` on container startup (called from the FastAPI lifespan in `app/main.py`); `models_dir` is never swept. Logs `Retention: removed N uploads, M outputs (RETAIN_DAYS=K)` so the spec acceptance test is grep-able. Stale stem-index entries are reaped after the file walk.
+- **`RETAIN_DAYS` semantics** — finalized: `>0` is days; `=0` deletes everything older than the moment of restart (per spec acceptance test); `<0` (e.g. `-1`) disables. `.env.example` comment updated.
+- **Backward compat for Phase 1 outputs** — `storage.transcript_paths()` falls through to legacy `{uuid}.txt`/`.json` when no index entry exists. Verified via `tests/test_phase2.py::test_resolver_legacy_fallback`. Old Phase 1 fixtures stay fetchable until retention reaps them.
+- **Disk usage endpoint** — `GET /v1/admin/storage` already shipped in Phase 1 with the spec'd shape; verified unchanged.
+- **`.json` header** — already shipped in Phase 1 with all spec fields (and a few extras: `device`, `diarization_model`); changed only one line — `created_at` now reads from `result["created_at"]` so the header timestamp matches the filename's date/time rather than drifting by however long the job took.
+- **Tests** — added `tests/test_phase2.py` (12 tests covering paragraph merge, filename pattern with title / untitled / special-char title, slug truncation, retention with positive / zero / negative `RETAIN_DAYS`, models_dir skip, legacy resolver fallback, 404). Extended `conftest.py`'s pipeline stub to 3 segments where two share `SPEAKER_00` so render_txt's merge path is exercised. All 22 tests pass.
+- **Image rebuilt** — `docker compose build` baked Phase 2 source into `transcribe-svc:cpu`. Phase 2 is now the durable state across `compose down/up`, not just a `docker cp`'d overlay.
+- **Doc updates** — `docs/API.md` (paragraph-per-turn `.txt` example, on-disk filename note, removed Phase-1-era forward-looking language, refreshed example `model`/`diarization_model` to match current operator config); `.env.example` (`RETAIN_DAYS` comment block); this status section.
+
+**Phase 2 §6 acceptance gate — final state:**
+- [x] Re-run smoke test; `.txt` is human-readable with timestamps. (Verified 2026-05-01 12:31 CDT.)
+- [x] Running with `RETAIN_DAYS=0` and `touch -d '-31 days' …` on a fixture cleans it up at next startup. (Verified: log line `Retention: removed 16 uploads, 20 outputs (RETAIN_DAYS=0)`; specifically the touched file `028bf8e7-…` was confirmed gone after restart; `models_dir` survived.)
+- [x] `docs/API.md` updated.
+
+**Deferred:**
+- The `pipeline.load()` partial-init idempotency bug (`_model` stays set on partial diarizer init failure) — task #10. Out of Phase 2 scope per the plan; folding it in would expand the test surface (need to mock a throwing diarizer) for a low-frequency error path. Standalone fix.
+- Async/polling job model — not in §6, not done.
+- Multi-token auth — Phase 4.
+
+**Surprised:**
+- The `/v1/admin/storage` endpoint and `.json` header turned out to be already-shipped in Phase 1, so two of five Phase 2 spec items were checkbox-only. Real work was confined to filename convention, paragraph merge, and retention — narrower than the spec list suggested.
+- Subtle gotcha caught during implementation: `cleanup_old_files`'s `rglob` would otherwise traverse into `outputs_dir/.index/`, potentially deleting index entries by their own mtime and orphaning files that point at them. Fixed by skipping `.index/` in the file walk; the explicit dangling-index sweep at the end is the canonical place to clean indices.
+- `docker compose down` followed by `docker compose up` recreates the container from the **image**, so any `docker cp`'d source overlay is lost. Phase 2 needed `docker compose build` to bake into the image — confirmed in the final round before claiming Phase 2 complete.
+
+**Phase 3 readiness:** Phase 2 §6 acceptance met. Phase 3 (per `PROJECT_PLAN.md` §6) is unblocked from the gate side.
+
