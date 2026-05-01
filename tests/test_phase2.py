@@ -167,3 +167,44 @@ def test_resolver_404_when_neither(client, auth_headers) -> None:
     r = client.get(f"/v1/results/{missing}/transcript.txt", headers=auth_headers)
     assert r.status_code == 404
     assert r.json() == {"error": "transcript not found"}
+
+
+# ----- pipeline.load() idempotency on partial failure (was task #10) -----
+
+def test_load_retries_after_partial_init_failure() -> None:
+    """If diarizer construction throws after the model has been built,
+    the pipeline must remain unloaded so the next load() call retries
+    instead of short-circuiting on stale state.
+    """
+    import asyncio
+    from app.pipeline import TranscribePipeline
+
+    pipe = TranscribePipeline()
+    attempts = {"n": 0}
+
+    def _load_blocking_throws_first() -> None:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("simulated diarizer init failure")
+        # Second call succeeds: install sentinel objects.
+        pipe._whisperx = object()
+        pipe._model = object()
+        pipe._diarizer = object()
+
+    pipe._load_blocking = _load_blocking_throws_first  # type: ignore[assignment]
+
+    # First attempt: must propagate the exception, leave pipeline unloaded.
+    try:
+        asyncio.run(pipe.load())
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected RuntimeError on first load()")
+    assert pipe.is_loaded() is False
+    assert attempts["n"] == 1
+
+    # Second attempt: must actually retry (not short-circuit), succeed,
+    # and flip the loaded flag.
+    asyncio.run(pipe.load())
+    assert pipe.is_loaded() is True
+    assert attempts["n"] == 2

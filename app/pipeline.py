@@ -27,16 +27,19 @@ class TranscribePipeline:
         self._diarizer: Any | None = None
         self._align_models: dict[str, tuple[Any, Any]] = {}
         self._whisperx: Any | None = None
+        self._loaded: bool = False
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
         self._load_lock = asyncio.Lock()
 
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._loaded
 
     async def load(self) -> None:
-        """Load whisper + diarization models once. Idempotent."""
+        """Load whisper + diarization models once. Idempotent on success;
+        retries on the next call if a previous attempt failed partway through.
+        """
         async with self._load_lock:
-            if self._model is not None:
+            if self._loaded:
                 return
             log.info(
                 "Loading whisperx (model=%s, device=%s, compute_type=%s)",
@@ -45,14 +48,18 @@ class TranscribePipeline:
                 settings.whisperx_compute_type,
             )
             await asyncio.to_thread(self._load_blocking)
+            self._loaded = True
             log.info("Models loaded.")
 
     def _load_blocking(self) -> None:
+        # Build all components into locals first; only commit them onto self
+        # once both the model and the diarizer have constructed successfully.
+        # Otherwise a partial failure leaves the pipeline half-initialized
+        # and the next load() call would short-circuit on a stale _model.
         os.environ.setdefault("HF_HOME", str(settings.hf_home))
         import whisperx  # type: ignore
 
-        self._whisperx = whisperx
-        self._model = whisperx.load_model(
+        model = whisperx.load_model(
             settings.whisper_model,
             device=settings.whisperx_device,
             compute_type=settings.whisperx_compute_type,
@@ -60,10 +67,14 @@ class TranscribePipeline:
         diarize_kwargs: dict[str, Any] = {"device": settings.whisperx_device}
         if settings.hf_token:
             diarize_kwargs["use_auth_token"] = settings.hf_token
-        self._diarizer = whisperx.DiarizationPipeline(
+        diarizer = whisperx.DiarizationPipeline(
             model_name=settings.diarization_model,
             **diarize_kwargs,
         )
+
+        self._whisperx = whisperx
+        self._model = model
+        self._diarizer = diarizer
 
     async def transcribe(
         self,
@@ -77,7 +88,7 @@ class TranscribePipeline:
         Concurrency is gated by self._semaphore so we never exceed
         MAX_CONCURRENT_JOBS regardless of request rate.
         """
-        if self._model is None:
+        if not self._loaded:
             await self.load()
         async with self._semaphore:
             return await asyncio.to_thread(

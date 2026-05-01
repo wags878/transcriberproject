@@ -95,7 +95,8 @@ def cleanup_old_files(retain_days: int) -> dict[str, int]:
     if retain_days < 0:
         return counts
     cutoff = time.time() - retain_days * 86400
-    idx_dir_path = _index_dir().resolve() if _index_dir().exists() else None
+    idx_dir = _index_dir()
+    idx_dir_resolved = idx_dir.resolve() if idx_dir.exists() else None
     for label, root in (("uploads", settings.uploads_dir),
                         ("outputs", settings.outputs_dir)):
         if not root.exists():
@@ -105,22 +106,15 @@ def cleanup_old_files(retain_days: int) -> dict[str, int]:
             if not p.is_file():
                 continue
             p_resolved = p.resolve()
-            try:
-                p_resolved.relative_to(root_resolved)
-            except ValueError:
+            if not p_resolved.is_relative_to(root_resolved):
                 continue
-            # Skip the stem-index directory; the explicit sweep below
-            # handles dangling index entries.
-            if idx_dir_path is not None:
-                try:
-                    p_resolved.relative_to(idx_dir_path)
-                    continue
-                except ValueError:
-                    pass
+            # The stem-index dir is swept separately below so dangling
+            # entries get cleaned up regardless of their own mtime.
+            if idx_dir_resolved is not None and p_resolved.is_relative_to(idx_dir_resolved):
+                continue
             if p.stat().st_mtime < cutoff:
                 p.unlink(missing_ok=True)
                 counts[label] += 1
-    idx_dir = _index_dir()
     if idx_dir.is_dir():
         for entry in idx_dir.iterdir():
             if not entry.is_file():
