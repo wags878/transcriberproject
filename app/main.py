@@ -25,6 +25,11 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     storage.ensure_dirs()
+    removed = storage.cleanup_old_files(settings.retain_days)
+    log.info(
+        "Retention: removed %d uploads, %d outputs (RETAIN_DAYS=%d)",
+        removed["uploads"], removed["outputs"], settings.retain_days,
+    )
     log.info("Starting transcribe-svc (model=%s, device=%s, compute_type=%s, max_concurrent=%d)",
              settings.whisper_model,
              settings.whisperx_device,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,56 @@ def transcript_paths(job_id: str) -> tuple[Path, Path] | None:
     if legacy_txt.exists() or legacy_json.exists():
         return (legacy_txt, legacy_json)
     return None
+
+
+def cleanup_old_files(retain_days: int) -> dict[str, int]:
+    """Delete files in uploads/ and outputs/ older than retain_days.
+
+    retain_days < 0  -> cleanup is disabled, returns zero counts.
+    retain_days == 0 -> delete anything older than the moment of this call
+                        (spec acceptance test relies on this).
+    models_dir is never swept.
+    """
+    counts = {"uploads": 0, "outputs": 0}
+    if retain_days < 0:
+        return counts
+    cutoff = time.time() - retain_days * 86400
+    idx_dir_path = _index_dir().resolve() if _index_dir().exists() else None
+    for label, root in (("uploads", settings.uploads_dir),
+                        ("outputs", settings.outputs_dir)):
+        if not root.exists():
+            continue
+        root_resolved = root.resolve()
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            p_resolved = p.resolve()
+            try:
+                p_resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            # Skip the stem-index directory; the explicit sweep below
+            # handles dangling index entries.
+            if idx_dir_path is not None:
+                try:
+                    p_resolved.relative_to(idx_dir_path)
+                    continue
+                except ValueError:
+                    pass
+            if p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+                counts[label] += 1
+    idx_dir = _index_dir()
+    if idx_dir.is_dir():
+        for entry in idx_dir.iterdir():
+            if not entry.is_file():
+                continue
+            stem = entry.read_text().strip()
+            txt = settings.outputs_dir / f"{stem}.txt"
+            js = settings.outputs_dir / f"{stem}.json"
+            if not txt.exists() and not js.exists():
+                entry.unlink(missing_ok=True)
+    return counts
 
 
 def dir_size_mb(path: Path) -> float:

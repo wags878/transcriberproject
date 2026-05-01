@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -84,6 +86,62 @@ def test_slug_truncation_at_40() -> None:
     s = storage.slugify(long_title)
     assert len(s) <= 40
     assert all(c.isalnum() or c == "-" for c in s)
+
+
+# ----- retention semantics -----
+
+def _make_old_file(path: Path, days_old: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("dummy")
+    cutoff = time.time() - days_old * 86400
+    os.utime(path, (cutoff, cutoff))
+    return path
+
+
+def test_retention_deletes_old(outputs_dir, uploads_dir) -> None:
+    old_out = _make_old_file(outputs_dir / "old_output.txt", 31)
+    old_up = _make_old_file(uploads_dir / "old_upload.wav", 31)
+    counts = storage.cleanup_old_files(30)
+    assert not old_out.exists()
+    assert not old_up.exists()
+    assert counts["outputs"] >= 1
+    assert counts["uploads"] >= 1
+
+
+def test_retention_keeps_recent(outputs_dir) -> None:
+    fresh = outputs_dir / "fresh.txt"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("dummy")
+    counts = storage.cleanup_old_files(30)
+    assert fresh.exists()
+    assert counts["outputs"] == 0
+    fresh.unlink()
+
+
+def test_retention_zero_deletes_anything_older_than_now(outputs_dir) -> None:
+    p = outputs_dir / "second_old.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("dummy")
+    one_second_ago = time.time() - 1
+    os.utime(p, (one_second_ago, one_second_ago))
+    counts = storage.cleanup_old_files(0)
+    assert not p.exists()
+    assert counts["outputs"] >= 1
+
+
+def test_retention_negative_disables(outputs_dir) -> None:
+    p = _make_old_file(outputs_dir / "very_old.txt", 365)
+    counts = storage.cleanup_old_files(-1)
+    assert p.exists()
+    assert counts == {"uploads": 0, "outputs": 0}
+    p.unlink()
+
+
+def test_retention_skips_models_dir(models_dir) -> None:
+    p = _make_old_file(models_dir / "weights.bin", 365)
+    storage.cleanup_old_files(0)
+    assert p.exists(), "models_dir must never be swept"
+    p.unlink()
 
 
 # ----- resolver -----
