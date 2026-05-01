@@ -61,3 +61,18 @@ def fake_audio() -> bytes:
     # WhisperX is stubbed in conftest, so the actual bytes don't matter — we
     # just need something to multipart-upload.
     return b"RIFF" + b"\x00" * 64
+
+
+@pytest.fixture
+def outputs_dir() -> Path:
+    return Path(os.environ["DATA_DIR"]) / "outputs"
+
+
+@pytest.fixture
+def uploads_dir() -> Path:
+    return Path(os.environ["DATA_DIR"]) / "uploads"
+
+
+@pytest.fixture
+def models_dir() -> Path:
+    return Path(os.environ["DATA_DIR"]) / "models"

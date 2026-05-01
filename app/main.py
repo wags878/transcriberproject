@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -73,6 +74,9 @@ async def transcribe(
         raise HTTPException(status_code=400, detail="audio file required")
 
     job_id = storage.new_job_id()
+    created_at = datetime.now(timezone.utc)
+    stem = storage.build_stem(created_at, title, job_id)
+
     upload_path: Path = await storage.save_upload(job_id, audio)
 
     size_mb = upload_path.stat().st_size / (1024 * 1024)
@@ -92,17 +96,15 @@ async def transcribe(
     except Exception as e:
         log.exception("Transcription failed for job %s", job_id)
         raise HTTPException(status_code=500, detail=f"transcription failed: {e}") from e
-    finally:
-        # Phase 1: keep uploads on disk for now (debugging). Phase 2 retention task cleans them.
-        pass
 
-    txt_path, json_path = storage.transcript_paths(job_id)
+    result["created_at"] = created_at.isoformat()
+    txt_path = settings.outputs_dir / f"{stem}.txt"
+    json_path = settings.outputs_dir / f"{stem}.json"
     txt_path.write_text(render_txt(result), encoding="utf-8")
     json_path.write_text(render_json(job_id, result), encoding="utf-8")
+    storage.write_stem_index(job_id, stem)
 
-    if title:
-        # Title is recorded in Phase 1 only as a JSON field; Phase 2 wires it into filenames.
-        log.info("Job %s title=%r", job_id, title)
+    log.info("Job %s title=%r stem=%s", job_id, title, stem)
 
     return TranscribeResponse(
         id=job_id,
@@ -119,10 +121,10 @@ async def transcribe(
     dependencies=[Depends(bearer_auth)],
 )
 async def get_transcript_txt(job_id: str) -> FileResponse:
-    txt_path, _ = storage.transcript_paths(job_id)
-    if not txt_path.exists():
+    paths = storage.transcript_paths(job_id)
+    if paths is None or not paths[0].exists():
         raise HTTPException(status_code=404, detail="transcript not found")
-    return FileResponse(txt_path, media_type="text/plain; charset=utf-8")
+    return FileResponse(paths[0], media_type="text/plain; charset=utf-8")
 
 
 @app.get(
@@ -130,10 +132,10 @@ async def get_transcript_txt(job_id: str) -> FileResponse:
     dependencies=[Depends(bearer_auth)],
 )
 async def get_transcript_json(job_id: str) -> FileResponse:
-    _, json_path = storage.transcript_paths(job_id)
-    if not json_path.exists():
+    paths = storage.transcript_paths(job_id)
+    if paths is None or not paths[1].exists():
         raise HTTPException(status_code=404, detail="transcript not found")
-    return FileResponse(json_path, media_type="application/json")
+    return FileResponse(paths[1], media_type="application/json")
 
 
 @app.get(

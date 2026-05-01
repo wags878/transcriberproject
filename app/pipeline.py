@@ -193,10 +193,15 @@ def render_txt(result: dict[str, Any]) -> str:
 
 
 def render_json(job_id: str, result: dict[str, Any]) -> str:
-    """Render WhisperX result + a header to JSON string."""
+    """Render WhisperX result + a header to JSON string.
+
+    If result['created_at'] is set (caller computed it before transcription
+    started), use it so the JSON header timestamp matches the on-disk
+    filename's date/time. Otherwise fall back to now.
+    """
     payload = {
         "id": job_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": result.get("created_at") or datetime.now(timezone.utc).isoformat(),
         "duration_seconds": result.get("duration_seconds"),
         "language": result.get("language"),
         "speakers_detected": result.get("speakers_detected"),
