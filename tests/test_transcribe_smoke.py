@@ -14,7 +14,7 @@ def test_transcribe_happy_path(client, auth_headers, fake_audio) -> None:
     assert body["transcript_txt_url"].endswith("/transcript.txt")
     assert body["transcript_json_url"].endswith("/transcript.json")
     assert body["speakers_detected"] == 2
-    assert body["duration_seconds"] == 3.0
+    assert body["duration_seconds"] == 4.5
     assert body["language"] == "en"
 
     # The result files should now exist via the result endpoints.
@@ -30,7 +30,7 @@ def test_transcribe_happy_path(client, auth_headers, fake_audio) -> None:
     assert payload["id"] == body["id"]
     assert payload["language"] == "en"
     assert payload["speakers_detected"] == 2
-    assert len(payload["segments"]) == 2
+    assert len(payload["segments"]) == 3
 
 
 def test_results_404_for_unknown_job(client, auth_headers) -> None:

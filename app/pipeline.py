@@ -170,20 +170,26 @@ class TranscribePipeline:
 def render_txt(result: dict[str, Any]) -> str:
     """Render WhisperX-style result to a speaker-labeled .txt.
 
-    Phase 1 output: '[mm:ss] SPEAKER_XX: text', one line per segment.
-    Phase 2 will do paragraph-per-turn merging.
+    One paragraph per speaker turn (consecutive same-speaker segments merged),
+    '[mm:ss] SPEAKER_XX: text' prefix using the start time of the turn.
+    Two newlines between turns.
     """
-    lines: list[str] = []
+    paragraphs: list[tuple[float, str, list[str]]] = []
     for seg in result.get("segments", []):
-        start = float(seg.get("start") or 0.0)
-        speaker = seg.get("speaker") or "SPEAKER_??"
         text = (seg.get("text") or "").strip()
         if not text:
             continue
+        speaker = seg.get("speaker") or "SPEAKER_??"
+        if paragraphs and paragraphs[-1][1] == speaker:
+            paragraphs[-1][2].append(text)
+        else:
+            paragraphs.append((float(seg.get("start") or 0.0), speaker, [text]))
+    lines: list[str] = []
+    for start, speaker, parts in paragraphs:
         mm = int(start // 60)
         ss = int(start % 60)
-        lines.append(f"[{mm:02d}:{ss:02d}] {speaker}: {text}")
-    return "\n\n".join(lines) + ("\n" if lines else "")
+        lines.append(f"[{mm:02d}:{ss:02d}] {speaker}: {' '.join(parts)}")
+    return ("\n\n".join(lines) + "\n") if lines else ""
 
 
 def render_json(job_id: str, result: dict[str, Any]) -> str:

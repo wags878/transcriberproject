@@ -30,13 +30,16 @@ def client() -> Iterator:
         return None
 
     async def _stub_transcribe(audio_path: Path, *, num_speakers=None, language=None):
+        # Three segments where 0 and 1 share SPEAKER_00 — exercises the
+        # paragraph-merge path in render_txt.
         return {
             "segments": [
                 {"start": 0.0, "end": 1.5, "text": "Hello there.", "speaker": "SPEAKER_00"},
-                {"start": 1.6, "end": 3.0, "text": "Hi back.", "speaker": "SPEAKER_01"},
+                {"start": 1.5, "end": 3.0, "text": "How are you today?", "speaker": "SPEAKER_00"},
+                {"start": 3.0, "end": 4.5, "text": "I am well, thank you.", "speaker": "SPEAKER_01"},
             ],
             "language": language or "en",
-            "duration_seconds": 3.0,
+            "duration_seconds": 4.5,
             "speakers_detected": 2,
             "elapsed_seconds": 0.01,
         }
