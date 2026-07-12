@@ -287,7 +287,23 @@ operator-supplied (synthetic) audio.
 **Deferred:**
 - Pyannote diarization on GPU (would cut the dominant cost for 60-min sessions).
 - Startup warm-up / `EAGER_LOAD` so the first real request isn't a cold load.
-- 5-min perf baseline + warm numbers (needs a longer synthetic fixture).
 - PWA client for the demo; native iOS/Android with embedded `tsnet` as
   `tag:transcribe-client` is post-demo (needs Apple/Play developer enrollment).
+
+### Throughput baseline (2026-07-12, warm, 145.9 s synthetic speech)
+
+| Path | Wall | Realtime factor |
+|---|---|---|
+| Pure GPU ASR (Speaches large-v3, diarization bypassed) | ~10.5 s | ~14× |
+| Full GPU pipeline (ASR ∥ CPU diarization + align + stitch) | ~51 s | ~2.85× |
+| CPU-only fallback (medium ASR + CPU diarization) | ~91 s | ~1.6× |
+
+GPU ASR is ~14× realtime; the full pipeline is **bounded by CPU-side pyannote
+diarization** (~2.85×). ASR finishes in ~10 s then waits ~40 s for diarization.
+60-min session extrapolation: GPU path ~21 min wall; CPU-only ~37 min; moving
+diarization to GPU would approach the ASR-bound ~4–5 min (~5× win — the single
+highest-value optimization). Cold first request is dominated by model load
+(a 12 s clip took 34–47 s cold vs. these warm numbers) — warm up before a demo.
+Measured via `docker exec` curl inside the netns; `MAX_CONCURRENT_JOBS=1`, so
+concurrent uploads serialize.
 
