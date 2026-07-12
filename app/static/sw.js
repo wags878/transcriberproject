@@ -1,6 +1,8 @@
-// Minimal service worker — enough to make the app installable and to serve the
-// shell offline. API calls (/v1/*) always go to the network; never cached.
-const CACHE = "transcribe-shell-v2";
+// Network-first service worker. Always tries the network so new deploys show up
+// immediately; falls back to cache only when offline. This avoids the
+// stale-shell trap that a cache-first worker causes during active development,
+// while keeping the app installable + offline-capable.
+const CACHE = "transcribe-shell-v3";
 const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -9,16 +11,25 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  // Never cache API traffic — always live.
-  if (url.pathname.startsWith("/v1/")) return;
-  if (e.request.method !== "GET") return;
-  // Cache-first for the app shell, fall back to network.
-  e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request)));
+  // API + sample audio always go straight to the network, never cached.
+  if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/samples/")) return;
+  if (e.request.method !== "GET" || url.origin !== location.origin) return;
+  // Network-first: fresh when online, cached shell when offline.
+  e.respondWith(
+    fetch(e.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(e.request).then((hit) => hit || caches.match("/")))
+  );
 });
