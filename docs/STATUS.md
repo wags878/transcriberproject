@@ -158,3 +158,70 @@ Phase 0 §6 acceptance item (`lscpu | grep -i avx512` returns flags) is now **fu
 
 **Phase 3 readiness:** Phase 2 §6 acceptance met. Phase 3 (per `PROJECT_PLAN.md` §6) is unblocked from the gate side.
 
+---
+
+## 2026-07-11 — GPU inference path + selected as TesterClaw's second test target
+
+Cross-project session (FamilyOS/TesterClaw coordination chat). Nothing in this repo changed;
+this entry records decisions and constraints that land on transcribe-svc.
+
+**Done / decided:**
+
+- **GPU acceleration is now available — and it is committed.** Operator hardware: Alienware
+  Area-51, i9 / 64 GB / **mobile RTX 5090 (24 GB VRAM)**, stationary + plugged in, on
+  Tailscale.
+  - **B-001 was RESOLVED by *lowering* the bar** (Proxmox VM → `WHISPER_MODEL=medium`,
+    `MAX_CONCURRENT_JOBS=1`). The 5090 lets us **raise it back**: `large-v3` fits comfortably
+    in 24 GB — order-of-magnitude faster and materially more accurate against the
+    "60-minute session" success bar. Use `docker-compose.gpu.yml`.
+  - Both are env-tunable already (`WHISPER_MODEL`, `MAX_CONCURRENT_JOBS`), so this is config
+    + host, not code.
+  - **Serve inference from bare metal / native on the GPU host.** Do **not** try to run GPU
+    inference in a container on the MacBook: Apple Silicon cannot pass the GPU to a Linux VM
+    (macOS holds it for the display) — **including Apple's new `container` project**.
+    Paravirtualized workarounds (krunkit/libkrun + Mesa Venus + MoltenVK) are Vulkan-compute
+    only and slow. Apple `container` is still fine for the *non-GPU* containers.
+
+- **transcribe-svc is now TesterClaw Plan C **T4.0** — the second-project genericity proof.**
+  Chosen over `ah-helpdesk` because it is the operator's own, domain-agnostic project with no
+  IP entanglement (ah-project is frozen pending an employment-agreement/counsel check).
+  - **It is API-only — no web UI.** TesterClaw's browser/UX persona runner (pages, DOM,
+    localStorage, axe, screenshots) **cannot crawl it.** It will be tested with TC's **API
+    persona runner** via `openapi_spec_url` (FastAPI serves `/openapi.json`) +
+    `auth_strategy: bearer_register_login`. **This is a stronger genericity proof** — a
+    different target *class*, different auth, different runner, profile-only, zero code change.
+  - Known caveat to check: `POST /v1/transcribe` is a **multipart file upload**; TC's API
+    runner may only speak JSON. If it can't upload, probing auth/401s/error handling/
+    content-type validation is still a valid proof.
+
+**🚨 HARD CONSTRAINT — PHI (read before any TesterClaw run against this service):**
+
+This service transcribes **therapy sessions** (`docs/STATUS.md` success bar: *"works for a
+60-minute therapy session"*). That content is **PHI**, and psychotherapy material carries
+heightened protection under HIPAA. `RETAIN_DAYS=30` means transcripts persist on disk.
+
+**TesterClaw must ONLY ever be pointed at a clean instance — empty output dir, SYNTHETIC
+audio only (e.g. a ~30-second nonsense clip). NEVER at an instance holding real recordings or
+transcripts.** Personas hitting endpoints that return or reference transcript content would
+pull PHI into TesterClaw's findings store and potentially out to frontier models.
+
+This is the "**eliminate the exposure, don't just detect it**" layer (L0) from
+`FamilyOS/plans/TESTERCLAW_ML_AND_INFERENCE_ROADMAP.md` §3, and the portfolio-wide
+**layered-defense** principle in `FamilyOS/PROJECT_PLAN.md` → Standing decisions.
+
+**Watch item — licensing (not a blocker):**
+
+`NOTICE` is thorough and correct (WhisperX BSD-2; pyannote.audio MIT; diarization **model
+weights CC-BY-4.0** with the required attribution string captured; Whisper/faster-whisper/
+CTranslate2 MIT). One open question: **ffmpeg is "LGPL/GPL depending on build."** Hosted use
+generally does not trigger copyleft (no distribution; separate binary, not linked). **But if
+the Docker image is ever distributed, know which ffmpeg build is baked in first.**
+
+**Surprised:**
+
+- The security posture note from Phase 0 (UFW off; *"anything on the LAN can reach the API
+  once it's bound"*) is the same trap that appears when serving a local model endpoint —
+  LM Studio/Ollama ship with **no authentication**, so binding to `0.0.0.0` publishes an open
+  model server. Bind to the Tailscale interface + gate with a Tailscale ACL. Worth revisiting
+  the UFW deviation here too before any wider exposure.
+
