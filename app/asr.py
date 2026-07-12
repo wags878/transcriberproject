@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
+
 from app.config import settings
 
 log = logging.getLogger("transcribe-svc.asr")
@@ -156,3 +158,92 @@ class LocalWhisperXASR:
                 device=settings.whisperx_device,
             )
         return self._align_models[language]
+
+
+class SpeachesASR:
+    """OpenAI-compatible ASR client. Works against Speaches, whisper.cpp
+    server (with --inference-path /v1/audio/transcriptions), or any other
+    server exposing that endpoint.
+
+    base_url: e.g. 'http://localhost:8001'
+    model_id: HuggingFace model ID passed as the 'model' form field.
+    healthcheck_timeout_s: short timeout for the /v1/models liveness probe so
+        a dead backend is skipped fast (the factory in pipeline.py wires this
+        from settings.asr_healthcheck_timeout_s).
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        model_id: str,
+        *,
+        timeout_s: float = 300.0,
+        healthcheck_timeout_s: float = 2.0,
+        response_format: str = "verbose_json",
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model_id = model_id
+        self._timeout = timeout_s
+        self._healthcheck_timeout = healthcheck_timeout_s
+        self._response_format = response_format
+        self._client = httpx.AsyncClient(timeout=timeout_s)
+
+    def name(self) -> str:
+        return f"speaches@{self._base_url}"
+
+    async def load(self) -> None:
+        # No-op: model lives on the remote host, loaded on its first call.
+        return None
+
+    async def health(self) -> bool:
+        try:
+            resp = await self._client.get(
+                f"{self._base_url}/v1/models",
+                timeout=self._healthcheck_timeout,
+            )
+            return resp.status_code == 200
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
+            return False
+        except httpx.HTTPError:
+            return False
+
+    async def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None = None,
+    ) -> ASRResult:
+        with audio_path.open("rb") as fh:
+            data = fh.read()
+        files = {"file": (audio_path.name, data, "audio/wav")}
+        form: dict[str, str] = {
+            "model": self._model_id,
+            "response_format": self._response_format,
+        }
+        if language:
+            form["language"] = language
+        resp = await self._client.post(
+            f"{self._base_url}/v1/audio/transcriptions",
+            files=files,
+            data=form,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        segments = [
+            {
+                "start": float(s.get("start") or 0.0),
+                "end": float(s.get("end") or 0.0),
+                "text": str(s.get("text") or ""),
+            }
+            for s in body.get("segments", [])
+        ]
+        duration = float(body.get("duration") or 0.0)
+        detected_language = str(body.get("language") or language or "en")
+        return ASRResult(
+            segments=segments,
+            language=detected_language,
+            duration_seconds=duration,
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
