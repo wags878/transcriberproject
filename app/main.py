@@ -176,6 +176,13 @@ import mimetypes
 from fastapi.staticfiles import StaticFiles
 
 mimetypes.add_type("application/manifest+json", ".webmanifest")
+
+# Synthetic demo clips (read-only) for the client's "try a sample" buttons.
+# Mounted before the catch-all so /samples/* resolves here.
+_samples_dir = Path(__file__).parent.parent / "samples"
+if _samples_dir.is_dir():
+    app.mount("/samples", StaticFiles(directory=str(_samples_dir)), name="samples")
+
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.is_dir():
     app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="pwa")

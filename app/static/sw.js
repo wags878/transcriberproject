@@ -1,7 +1,7 @@
 // Minimal service worker — enough to make the app installable and to serve the
 // shell offline. API calls (/v1/*) always go to the network; never cached.
-const CACHE = "transcribe-shell-v1";
-const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "transcribe-shell-v2";
+const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

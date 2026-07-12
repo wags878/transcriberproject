@@ -64,6 +64,9 @@ RUN pip install --upgrade pip \
 
 # Copy app code last to maximize cache hits on the heavy install layer.
 COPY app/ ./app/
+# Synthetic demo clips, served read-only at /samples for the web client's
+# "try a sample" buttons. ~1.4 MB, no PHI.
+COPY samples/ ./samples/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
