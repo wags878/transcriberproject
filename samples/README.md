@@ -5,6 +5,20 @@ so anyone can smoke-test the transcription + diarization pipeline without
 hunting for audio. Unlike `tests/fixtures/` (gitignored for real/vetted audio),
 these are committed on purpose.
 
+## The clips
+
+| File | Length | Speakers | Purpose |
+|---|---|---|---|
+| `quick_note.mp3` | ~14s | 1 | fast single-speaker sanity check |
+| `quick_qa.mp3` | ~32s | 2 | short two-speaker Q&A |
+| `friendly_conversation.mp3` | ~91s | 2 | longer two-speaker catch-up |
+| `team_standup.mp3` | ~43s | 3 | three distinct voices (diarization beyond two) |
+
+Verified live through the pipeline: `speakers_detected` = 1 / 2 / 2 / 3
+respectively. Voices used: `en-US-AriaNeural` (A, US female),
+`en-US-GuyNeural` (B, US male), `en-GB-SoniaNeural` (C, UK female). Each clip's
+`ml/`-style ground truth is the alternating turns below.
+
 ## `friendly_conversation.mp3`
 
 A ~91-second friendly catch-up between two people, rendered with two distinct
