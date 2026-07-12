@@ -139,3 +139,32 @@ Auth: required.
 ```
 
 Sizes of the corresponding container volumes.
+
+---
+
+## ASR backend selection
+
+`transcribe-svc` supports two ASR execution modes, chosen at startup via env
+`ASR_BACKEND`:
+
+- **`ASR_BACKEND=whisperx`** (default) — in-container WhisperX. Runs on CPU.
+  Phase 2 behavior. Used on the Proxmox VM.
+- **`ASR_BACKEND=router`** — health-checked fallback chain over a priority list
+  from `ASR_HOSTS`. URL entries are treated as OpenAI-compat servers
+  (`POST {base}/v1/audio/transcriptions`); the sentinel `local-whisperx`
+  routes to in-container WhisperX as the last-resort tier.
+
+Example (Alienware GPU deployment):
+
+```
+ASR_BACKEND=router
+ASR_HOSTS=http://127.0.0.1:8001,http://mbp.tailnet.ts.net:8001,local-whisperx
+ASR_MODEL_ID=Systran/faster-whisper-large-v3
+```
+
+The backend that served each request is reported in the response body's
+`asr_backend` field and in the `.json` transcript header — useful when
+diagnosing fallback drift.
+
+Diarization always runs in-container via pyannote; the ASR backend only affects
+speech-to-text.
