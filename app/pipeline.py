@@ -67,13 +67,16 @@ class TranscribePipeline:
             segments_with_speakers = stitch_speakers(asr_result.segments, turns)
             speakers = self._count_speakers(segments_with_speakers)
             elapsed = time.monotonic() - t_start
+            # Report the tier that actually served (asr_result.served_by), not
+            # the router chain; fall back to the configured backend's name.
+            served_by = asr_result.served_by or self._asr.name()
             log.info(
                 "Transcribed %.1fs of audio in %.1fs (%.2fx realtime); "
                 "asr=%s language=%s speakers=%d",
                 asr_result.duration_seconds,
                 elapsed,
                 (asr_result.duration_seconds / elapsed) if elapsed > 0 else 0.0,
-                self._asr.name(),
+                served_by,
                 asr_result.language,
                 speakers,
             )
@@ -83,7 +86,8 @@ class TranscribePipeline:
                 "duration_seconds": asr_result.duration_seconds,
                 "speakers_detected": speakers,
                 "elapsed_seconds": elapsed,
-                "asr_backend": self._asr.name(),
+                "asr_backend": served_by,
+                "asr_model": asr_result.model,
             }
 
     @staticmethod
@@ -128,7 +132,7 @@ def render_json(job_id: str, result: dict[str, Any]) -> str:
         "duration_seconds": result.get("duration_seconds"),
         "language": result.get("language"),
         "speakers_detected": result.get("speakers_detected"),
-        "model": settings.whisper_model,
+        "model": result.get("asr_model") or settings.whisper_model,
         "compute_type": settings.whisperx_compute_type,
         "device": settings.whisperx_device,
         "diarization_model": settings.diarization_model,

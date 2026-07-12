@@ -18,6 +18,13 @@ class ASRResult:
     - segments: list of {'start': float, 'end': float, 'text': str, optional 'words': [...]}
     - language: detected language code (e.g. 'en')
     - duration_seconds: total audio duration
+    - served_by: name() of the concrete backend that produced this result. The
+      router leaves each backend's value intact so the pipeline can report which
+      tier actually answered (not the whole chain) — the point of the field is
+      diagnosing fallback drift.
+    - model: the model identifier that backend used (e.g. 'medium' for local
+      WhisperX, 'Systran/faster-whisper-large-v3' for Speaches), so the .json
+      header reflects reality rather than the local fallback's config.
     """
 
     def __init__(
@@ -25,16 +32,23 @@ class ASRResult:
         segments: list[dict[str, Any]],
         language: str,
         duration_seconds: float,
+        *,
+        served_by: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.segments = segments
         self.language = language
         self.duration_seconds = duration_seconds
+        self.served_by = served_by
+        self.model = model
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "segments": self.segments,
             "language": self.language,
             "duration_seconds": self.duration_seconds,
+            "served_by": self.served_by,
+            "model": self.model,
         }
 
 
@@ -148,6 +162,8 @@ class LocalWhisperXASR:
             segments=segments,
             language=detected_language,
             duration_seconds=duration_seconds,
+            served_by=self.name(),
+            model=settings.whisper_model,
         )
 
     def _get_align_model(self, language: str) -> tuple[Any, Any]:
@@ -243,6 +259,8 @@ class SpeachesASR:
             segments=segments,
             language=detected_language,
             duration_seconds=duration,
+            served_by=self.name(),
+            model=self._model_id,
         )
 
     async def aclose(self) -> None:
@@ -286,7 +304,13 @@ class ASRRouter:
                 continue
             try:
                 log.info("ASRRouter: routing to %s", b.name())
-                return await b.transcribe(audio_path, language=language)
+                result = await b.transcribe(audio_path, language=language)
+                # Preserve the concrete backend's identity; only fill in if a
+                # backend didn't set it, so the pipeline reports the tier that
+                # actually served rather than the whole router chain.
+                if result.served_by is None:
+                    result.served_by = b.name()
+                return result
             except Exception as e:
                 log.warning(
                     "ASRRouter: backend %s failed mid-request (%s); falling through",

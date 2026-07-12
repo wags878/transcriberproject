@@ -44,6 +44,7 @@ async def test_router_first_healthy_wins(tmp_audio: Path) -> None:
     assert a.transcribe_called is True
     assert b.transcribe_called is False
     assert result.segments[0]["text"] == "A"
+    assert result.served_by == "A"
 
 
 async def test_router_falls_through_when_first_unhealthy(tmp_audio: Path) -> None:
@@ -54,6 +55,7 @@ async def test_router_falls_through_when_first_unhealthy(tmp_audio: Path) -> Non
     assert a.transcribe_called is False
     assert b.transcribe_called is True
     assert result.segments[0]["text"] == "B"
+    assert result.served_by == "B"
 
 
 async def test_router_raises_when_all_unhealthy(tmp_audio: Path) -> None:

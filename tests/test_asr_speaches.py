@@ -42,6 +42,9 @@ async def test_speaches_parses_verbose_json(tmp_audio: Path) -> None:
     assert result.segments[0]["text"] == "hello world"
     assert result.language == "en"
     assert result.duration_seconds == 3.5
+    # served_by/model identify the tier + model that produced this result.
+    assert result.served_by == "speaches@http://localhost:8001"
+    assert result.model == "Systran/faster-whisper-large-v3"
 
 
 @pytest.mark.asyncio
