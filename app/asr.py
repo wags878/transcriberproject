@@ -247,3 +247,52 @@ class SpeachesASR:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+class ASRRouter:
+    """Tries backends in priority order. First one that passes a health
+    check gets the request. If its transcribe() raises, falls through to
+    the next healthy backend. If none respond, raises RuntimeError.
+    """
+
+    def __init__(self, backends: list[ASRBackend]) -> None:
+        if not backends:
+            raise ValueError("ASRRouter requires at least one backend")
+        self._backends = backends
+
+    def name(self) -> str:
+        return "router[" + ",".join(b.name() for b in self._backends) + "]"
+
+    async def load(self) -> None:
+        # Backends load lazily on first call; nothing to do here.
+        return None
+
+    async def health(self) -> bool:
+        for b in self._backends:
+            if await b.health():
+                return True
+        return False
+
+    async def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None = None,
+    ) -> ASRResult:
+        last_exc: Exception | None = None
+        for b in self._backends:
+            if not await b.health():
+                log.info("ASRRouter: backend %s unhealthy, skipping", b.name())
+                continue
+            try:
+                log.info("ASRRouter: routing to %s", b.name())
+                return await b.transcribe(audio_path, language=language)
+            except Exception as e:
+                log.warning(
+                    "ASRRouter: backend %s failed mid-request (%s); falling through",
+                    b.name(), e,
+                )
+                last_exc = e
+        if last_exc is not None:
+            raise RuntimeError(f"no healthy ASR backend responded successfully: {last_exc}") from last_exc
+        raise RuntimeError("no healthy ASR backend responded successfully")
