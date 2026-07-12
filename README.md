@@ -55,8 +55,8 @@ transcribe-svc/
 │   ├── Dockerfile.gpu        future / optional
 │   └── entrypoint.sh
 ├── app/                      FastAPI service code
+│   └── static/               installable PWA client (served at /)
 ├── tests/                    pytest suite
-├── clients/                  curl + PWA test clients (Phase 3)
 └── docs/
     ├── HARDWARE.md           current host facts
     ├── BLOCKERS.md           open issues

@@ -163,3 +163,19 @@ async def _http_exc(_, exc: HTTPException) -> JSONResponse:  # type: ignore[over
         content={"error": exc.detail},
         headers=exc.headers or {},
     )
+
+
+# --- Static PWA client -------------------------------------------------------
+# Served same-origin (no CORS) so it works via both the published localhost port
+# and the tailnet URL. Mounted LAST so every /v1 API route above takes
+# precedence; anything else (/, /icon.svg, /manifest.webmanifest, /sw.js) is
+# served from app/static. The client holds the bearer token in localStorage and
+# sends it on each request — the API itself stays auth-gated.
+import mimetypes
+
+from fastapi.staticfiles import StaticFiles
+
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="pwa")

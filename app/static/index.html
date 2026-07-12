@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1020" />
+<title>transcribe-svc</title>
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --bg: #f6f7fb; --card: #ffffff; --ink: #10151f; --muted: #5b6472;
+    --line: #e4e7ee; --accent: #3b62f6; --accent-ink: #ffffff;
+    --ok: #128a3a; --err: #c0362c; --chip: #eef1f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1020; --card: #141b2e; --ink: #eef1f8; --muted: #9aa4b8;
+      --line: #26304a; --accent: #6d8bff; --accent-ink: #0b1020;
+      --ok: #4ad07d; --err: #ff7a6e; --chip: #1c2540;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 20px 16px 64px;
+    padding-top: max(20px, env(safe-area-inset-top)); }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  header img { width: 34px; height: 34px; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  header .pill { margin-left: auto; font-size: 12px; color: var(--muted);
+    background: var(--chip); padding: 4px 10px; border-radius: 999px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+  input[type=text], input[type=password], input[type=number] {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 15px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 140px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px;
+    padding: 11px 16px; cursor: pointer; }
+  .primary { background: var(--accent); color: var(--accent-ink); width: 100%; margin-top: 6px; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .ghost { background: var(--chip); color: var(--ink); }
+  .rec.on { background: var(--err); color: #fff; }
+  .filerow { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .filename { font-size: 13px; color: var(--muted); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  #status { font-size: 14px; margin: 4px 2px 0; min-height: 20px; }
+  #status.ok { color: var(--ok); } #status.err { color: var(--err); }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 2px; }
+  .meta span { font-size: 12px; background: var(--chip); color: var(--muted);
+    padding: 3px 9px; border-radius: 999px; }
+  pre#out { white-space: pre-wrap; word-wrap: break-word; margin: 0;
+    font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .links a { color: var(--accent); font-size: 13px; margin-right: 14px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
+    border: 2px solid var(--muted); border-top-color: transparent;
+    border-radius: 50%; animation: spin .8s linear infinite; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/icon.svg" alt="" />
+    <h1>transcribe-svc</h1>
+    <span class="pill" id="origin"></span>
+  </header>
+
+  <div class="card">
+    <details id="settings">
+      <summary>API token &amp; settings</summary>
+      <div style="margin-top:12px">
+        <label for="token">Bearer token</label>
+        <input type="password" id="token" placeholder="paste your API_TOKEN" autocomplete="off" />
+        <p style="font-size:12px;color:var(--muted);margin:8px 2px 0">
+          Stored only in this browser (localStorage). Sent as
+          <code>Authorization: Bearer …</code> to this same host.
+        </p>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <label>Audio</label>
+    <div class="filerow">
+      <button class="ghost" id="pick">Choose file</button>
+      <button class="ghost rec" id="record">● Record</button>
+      <span class="filename" id="fname">no file selected</span>
+    </div>
+    <input type="file" id="file" accept="audio/*" hidden />
+
+    <div class="row" style="margin-top:14px">
+      <div>
+        <label for="title">Title (optional)</label>
+        <input type="text" id="title" placeholder="session-2026-07-12" />
+      </div>
+      <div>
+        <label for="spk">Speakers (optional)</label>
+        <input type="number" id="spk" min="1" max="10" placeholder="auto" />
+      </div>
+    </div>
+
+    <button class="primary" id="go" disabled>Transcribe</button>
+    <p id="status"></p>
+  </div>
+
+  <div class="card" id="result" hidden>
+    <div class="meta" id="meta"></div>
+    <pre id="out"></pre>
+    <div class="links" id="links" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+$("origin").textContent = location.host;
+
+// --- token persistence ---
+const TOK = "transcribe_svc_token";
+$("token").value = localStorage.getItem(TOK) || "";
+if (!$("token").value) $("settings").open = true;
+$("token").addEventListener("input", () => localStorage.setItem(TOK, $("token").value.trim()));
+
+// --- file / record ---
+let blob = null, blobName = "";
+function setFile(b, name) { blob = b; blobName = name; $("fname").textContent = name;
+  $("go").disabled = !(blob && $("token").value.trim()); }
+$("token").addEventListener("input", () => $("go").disabled = !(blob && $("token").value.trim()));
+
+$("pick").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", (e) => {
+  const f = e.target.files[0]; if (f) setFile(f, f.name);
+});
+
+let mediaRec = null, chunks = [];
+$("record").addEventListener("click", async () => {
+  if (mediaRec && mediaRec.state === "recording") { mediaRec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = []; mediaRec = new MediaRecorder(stream);
+    mediaRec.ondataavailable = (e) => chunks.push(e.data);
+    mediaRec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const b = new Blob(chunks, { type: mediaRec.mimeType || "audio/webm" });
+      setFile(b, "recording.webm");
+      $("record").classList.remove("on"); $("record").textContent = "● Record";
+    };
+    mediaRec.start(); $("record").classList.add("on"); $("record").textContent = "■ Stop";
+  } catch (err) { setStatus("Mic error: " + err.message, "err"); }
+});
+
+function setStatus(msg, cls) { const s = $("status"); s.className = cls || ""; s.innerHTML = msg; }
+
+// --- submit ---
+$("go").addEventListener("click", async () => {
+  const token = $("token").value.trim();
+  if (!blob || !token) return;
+  $("go").disabled = true; $("result").hidden = true;
+  const t0 = performance.now();
+  setStatus('<span class="spinner"></span>Transcribing… (GPU ASR + diarization; can take a while for long audio)', "");
+
+  const fd = new FormData();
+  fd.append("audio", blob, blobName);
+  if ($("title").value.trim()) fd.append("title", $("title").value.trim());
+  if ($("spk").value) fd.append("num_speakers", $("spk").value);
+
+  try {
+    const r = await fetch("/v1/transcribe", {
+      method: "POST", headers: { "Authorization": "Bearer " + token }, body: fd,
+    });
+    if (r.status === 401) { setStatus("401 Unauthorized — check your token.", "err"); $("go").disabled = false; return; }
+    if (!r.ok) { setStatus("Error " + r.status + ": " + (await r.text()), "err"); $("go").disabled = false; return; }
+    const j = await r.json();
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+
+    const txt = await (await fetch(j.transcript_txt_url, { headers: { "Authorization": "Bearer " + token } })).text();
+    $("out").textContent = txt;
+    $("meta").innerHTML =
+      `<span>${(j.duration_seconds || 0).toFixed(1)}s audio</span>` +
+      `<span>${secs}s wall</span>` +
+      `<span>${j.speakers_detected} speaker(s)</span>` +
+      `<span>lang: ${j.language || "?"}</span>`;
+    // Result routes require the bearer header, so a plain link would 401.
+    // Fetch each with auth and open as a blob URL.
+    $("links").innerHTML = "";
+    for (const [label, url] of [[".txt", j.transcript_txt_url], [".json", j.transcript_json_url]]) {
+      const a = document.createElement("a");
+      a.href = "#"; a.textContent = label;
+      a.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const resp = await fetch(url, { headers: { "Authorization": "Bearer " + token } });
+        const b = await resp.blob();
+        window.open(URL.createObjectURL(b), "_blank", "noopener");
+      });
+      $("links").appendChild(a);
+    }
+    $("result").hidden = false;
+    setStatus("Done ✓", "ok");
+  } catch (err) {
+    setStatus("Request failed: " + err.message, "err");
+  } finally {
+    $("go").disabled = !(blob && $("token").value.trim());
+  }
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>

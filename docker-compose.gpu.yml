@@ -22,6 +22,12 @@ services:
     image: tailscale/tailscale:latest
     container_name: transcribe-svc-tailscale
     hostname: transcribe-svc
+    # Port publishing must live on the netns owner (this container), since
+    # transcribe-svc/speaches share its namespace. Expose ONLY transcribe-svc's
+    # 8000 on host loopback for local testing/PWA; the tailnet path is
+    # unchanged and Speaches' 8001 stays internal (never published).
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_STATE_DIR: /var/lib/tailscale
