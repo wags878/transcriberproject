@@ -225,3 +225,29 @@ the Docker image is ever distributed, know which ffmpeg build is baked in first.
   model server. Bind to the Tailscale interface + gate with a Tailscale ACL. Worth revisiting
   the UFW deviation here too before any wider exposure.
 
+---
+
+## 2026-07-12 — Phase 3 work started on branch `phase-3-gpu` (main unchanged)
+
+Operator elected to start GPU acceleration work on an isolated branch so `main` continues
+to ship the Phase 2 CPU state that TesterClaw's T4.0 target depends on. Nothing on `main`
+changes here — this entry is a pointer so `main` isn't blind to the branch.
+
+**On `phase-3-gpu`:**
+- Design doc: `docs/superpowers/specs/2026-07-12-phase-3-gpu-speaches-design.md`
+- Approach: **Path 1 — Speaches sidecar**. ASR moves to a `ghcr.io/speaches-ai/speaches:latest-cuda`
+  container that ships its own CUDA 12.8 + PyTorch 2.7+ stack, so the 5090 (Blackwell sm_120)
+  can be used without rebuilding `transcribe-svc`'s existing `whisperx==3.2.0` / `torch==2.0.1`
+  pin chain. pyannote diarization stays CPU-side inside `transcribe-svc`. Tailscale runs as a
+  sidecar container; `transcribe-svc` and `speaches` share its network namespace, so only
+  `transcribe-svc:8000` is reachable over the tailnet (`speaches` binds `127.0.0.1:8001`).
+- Deployment target: **Alienware Area-51** (Windows 11 + WSL2 + Docker Desktop + RTX 5090 24 GB).
+- Fallback tier: **MacBook M5** running `whisper.cpp` server (LM Studio does not yet expose
+  `/v1/audio/transcriptions`; Ollama can't run Whisper). Final fallback = in-container WhisperX
+  on CPU (Phase 1/2 code path preserved).
+- Explicit escape hatch: if Phase 3 is abandoned, deleting the branch loses only speculative
+  work. `main` continues to serve the T4.0 target and any real recording workloads.
+
+**Not started yet:** any code changes. Design is under operator review before an
+implementation plan is drafted.
+
