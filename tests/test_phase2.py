@@ -172,26 +172,41 @@ def test_resolver_404_when_neither(client, auth_headers) -> None:
 # ----- pipeline.load() idempotency on partial failure (was task #10) -----
 
 def test_load_retries_after_partial_init_failure() -> None:
-    """If diarizer construction throws after the model has been built,
-    the pipeline must remain unloaded so the next load() call retries
-    instead of short-circuiting on stale state.
+    """If a component's load throws, the pipeline must remain unloaded so the
+    next load() call retries instead of short-circuiting on stale state.
+
+    Post-Phase-3 the pipeline composes an ASR backend + a Diarizer and loads
+    them via asyncio.gather; the idempotency invariant is exercised here by
+    injecting an ASR backend whose load() fails on the first attempt and
+    succeeds on the second.
     """
     import asyncio
+
     from app.pipeline import TranscribePipeline
 
-    pipe = TranscribePipeline()
     attempts = {"n": 0}
 
-    def _load_blocking_throws_first() -> None:
-        attempts["n"] += 1
-        if attempts["n"] == 1:
-            raise RuntimeError("simulated diarizer init failure")
-        # Second call succeeds: install sentinel objects.
-        pipe._whisperx = object()
-        pipe._model = object()
-        pipe._diarizer = object()
+    class _FlakyASR:
+        def name(self) -> str:
+            return "flaky-asr"
 
-    pipe._load_blocking = _load_blocking_throws_first  # type: ignore[assignment]
+        async def load(self) -> None:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("simulated ASR init failure")
+            return None
+
+        async def health(self) -> bool:
+            return True
+
+        async def transcribe(self, audio_path, *, language=None):  # pragma: no cover
+            raise NotImplementedError
+
+    class _NoopDiarizer:
+        async def load(self) -> None:
+            return None
+
+    pipe = TranscribePipeline(asr=_FlakyASR(), diarizer=_NoopDiarizer())  # type: ignore[arg-type]
 
     # First attempt: must propagate the exception, leave pipeline unloaded.
     try:
