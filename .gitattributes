@@ -1,0 +1,18 @@
+# The repo now lives on a Windows host (Alienware) but every runtime target is
+# a Linux container. Force LF in the working tree for all text files so files
+# baked into images — especially docker/entrypoint.sh — never carry a CRLF that
+# would break a shebang or a heredoc inside the container.
+* text=auto eol=lf
+
+# Belt-and-suspenders for the container-critical files.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile* text eol=lf
+*.env       text eol=lf
+
+# Binary fixtures must never be normalized.
+*.wav binary
+*.png binary
+*.jpg binary
