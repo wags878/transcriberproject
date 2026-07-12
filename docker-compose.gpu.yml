@@ -1,15 +1,64 @@
-# GPU overlay. NOT used by default. Per operator decision 2026-04-30, the
-# GPU path is dormant — see docs/BLOCKERS.md B-001 and PROJECT_PLAN.md §8 Q2.
-# To opt in (after confirming `nvidia-smi` works inside a container):
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# GPU deployment for Alienware (Windows 11 + WSL2 + Docker Desktop + RTX 5090).
+#
+# Three-container stack. All three share the tailscale sidecar's network
+# namespace, so:
+#   - transcribe-svc is reachable at https://transcribe-svc.<tailnet>.ts.net
+#   - speaches binds 127.0.0.1:8001 (transcribe-svc only; not tailnet-visible)
+#   - No host port bindings anywhere.
+#
+# Bring up: docker compose -f docker-compose.gpu.yml up -d
+#
+# Prereqs (docs/DEPLOY.md, Windows section):
+#   - NVIDIA driver v566+ on the Windows host (Blackwell / WSL2 support)
+#   - Windows power settings: never sleep, lid close = do nothing
+#   - Docker Desktop with WSL2 backend + Ubuntu-22.04 integration
+#   - GPU verify: `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi`
+#   - Tailscale reusable auth key with tag:transcribe-svc → TS_AUTHKEY in .env
+
+name: transcribe-svc
+
 services:
-  transcribe-svc:
-    build:
-      dockerfile: docker/Dockerfile.gpu
-    image: transcribe-svc:gpu
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: transcribe-svc-tailscale
+    hostname: transcribe-svc
     environment:
-      WHISPERX_DEVICE: cuda
-      WHISPERX_COMPUTE_TYPE: int8
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_EXTRA_ARGS: --advertise-tags=tag:transcribe-svc --accept-dns=true
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: transcribe-svc-speaches
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    network_mode: service:tailscale
+    environment:
+      # Speaches binds to 8001 inside the shared netns; only transcribe-svc
+      # reaches it via localhost. Do NOT expose on 0.0.0.0.
+      UVICORN_HOST: 127.0.0.1
+      UVICORN_PORT: "8001"
+      WHISPER__MODEL: ${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}
+      WHISPER__COMPUTE_TYPE: int8_float16
+      # Turn off any usage telemetry that ships enabled. Verify at deploy.
+      SPEACHES_TELEMETRY: "false"
+    volumes:
+      - speaches_models:/home/ubuntu/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -17,3 +66,46 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/v1/models"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  transcribe-svc:
+    container_name: transcribe-svc
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    image: transcribe-svc:cpu
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      speaches:
+        condition: service_healthy
+    network_mode: service:tailscale
+    env_file:
+      - .env
+    environment:
+      ASR_BACKEND: router
+      ASR_HOSTS: "http://127.0.0.1:8001,local-whisperx"
+    volumes:
+      - models:/data/models
+      - uploads:/data/uploads
+      - outputs:/data/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+volumes:
+  tailscale_state:
+  speaches_models:
+  models:
+  uploads:
+  outputs:
