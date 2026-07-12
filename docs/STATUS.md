@@ -225,3 +225,69 @@ the Docker image is ever distributed, know which ffmpeg build is baked in first.
   model server. Bind to the Tailscale interface + gate with a Tailscale ACL. Worth revisiting
   the UFW deviation here too before any wider exposure.
 
+---
+
+## 2026-07-12 — Phase 3 implemented + deployed on the Alienware (GPU via Speaches)
+
+New home of record: the Alienware Area-51 laptop (Windows 11 + WSL2 + Docker
+Desktop, RTX 5090 Laptop 24 GB, driver 592.02). transcribe-svc migrated off the
+Proxmox VM. GPU passthrough verified (`docker run --gpus all
+nvidia/cuda:12.8.0-base nvidia-smi` sees the 5090).
+
+**Shipped (Tasks 0–10 of the Phase 3 plan):**
+- Composable pipeline: `app/asr.py` (`ASRBackend` protocol, `LocalWhisperXASR`,
+  `SpeachesASR`, `ASRRouter`), `app/diarize.py` (`Diarizer`), `app/stitch.py`
+  (`stitch_speakers`). `TranscribePipeline` now runs ASR + diarization
+  concurrently (`asyncio.gather`) and stitches. Public HTTP surface unchanged.
+- ASR routing: `ASR_BACKEND=router`, `ASR_HOSTS=http://127.0.0.1:8001,local-whisperx`.
+  Health-checked first-healthy-wins with fall-through to CPU on error.
+- Three-container GPU stack (`docker-compose.gpu.yml`): tailscale sidecar +
+  Speaches (CUDA) + transcribe-svc sharing the tailscale netns. No host ports.
+- Unit tests: 39 passing (stitch 7, speaches 4, router 5, + existing). Run
+  locally in a no-torch WSL venv (get-pip bootstrap — ensurepip is stripped and
+  there's no passwordless sudo; documented in DEPLOY.md).
+
+**Acceptance — all met (synthetic gTTS clip only; PHI rule: never real audio):**
+- All three containers healthy; tailscale node `transcribe-svc.example-tailnet.ts.net`
+  tagged `tag:transcribe-svc`, online.
+- `/v1/health` returns the documented JSON.
+- GPU path: `.json` shows `asr_backend=speaches@http://127.0.0.1:8001`,
+  `model=Systran/faster-whisper-large-v3`. Transcript accurate + speaker-labeled.
+- Fallback: stop Speaches → `asr_backend=local-whisperx`, `model=medium`, still 200.
+  Restart Speaches → GPU path resumes.
+- VRAM: ~3.6 GB with large-v3 resident (well under 24 GB).
+
+**Detours hit (all resolved):**
+- **B-005 (resolved): Speaches does not auto-download the ASR model.** First
+  transcription 404'd ("model is not installed locally") and the router silently
+  fell back to CPU. Root-caused via the new `served_by`/`model` reporting (added
+  precisely because the pre-fix `asr_backend` printed the whole router chain and
+  hid which tier served). Fixed with `PRELOAD_MODELS='["...large-v3"]'` in compose
+  (persists in the `speaches_models` volume) + relaxed transcribe-svc's
+  dependency to `service_started` (it has the CPU fallback) + bumped the speaches
+  healthcheck `start_period` to 900s for the ~3 GB first-run pull.
+- Windows line endings: `core.autocrlf=true` had rewritten `docker/entrypoint.sh`
+  to CRLF in the working tree — a latent build-breaker (CRLF shebang). Added
+  `.gitattributes` forcing LF + set repo-local `autocrlf=false`.
+- Tooling gotchas for the next agent: the Windows `docker.exe` needs Windows
+  paths for `docker cp` (git-bash `/c/...` paths silently produce an unreadable
+  file → curl exit 26); `git-bash` has no `docker` on PATH (use the full
+  `/c/Program Files/Docker/...` path or PowerShell); PowerShell 5.1 flips `$?` to
+  false on any native-command stderr, so BuildKit progress reads as a false
+  "build failed".
+
+**Performance reality (first request, cold):** 12.2 s synthetic clip took 34–47 s
+wall on a cold stack — dominated by first-time model loads (Speaches loading
+large-v3 into VRAM, pyannote + wav2vec2 alignment) and **CPU-side diarization**.
+GPU accelerates ASR only; pyannote diarization stays on CPU by design, so it is
+the bottleneck for long sessions. Warm steady-state is materially faster. A real
+5-minute-fixture baseline and warm-run numbers are still to be measured on
+operator-supplied (synthetic) audio.
+
+**Deferred:**
+- Pyannote diarization on GPU (would cut the dominant cost for 60-min sessions).
+- Startup warm-up / `EAGER_LOAD` so the first real request isn't a cold load.
+- 5-min perf baseline + warm numbers (needs a longer synthetic fixture).
+- PWA client for the demo; native iOS/Android with embedded `tsnet` as
+  `tag:transcribe-client` is post-demo (needs Apple/Play developer enrollment).
+
