@@ -14,5 +14,8 @@ Dockerfile* text eol=lf
 
 # Binary fixtures must never be normalized.
 *.wav binary
+*.mp3 binary
+*.m4a binary
+*.flac binary
 *.png binary
 *.jpg binary
