@@ -14,6 +14,7 @@ os.environ["DATA_DIR"] = str(_TMP_DATA)
 os.environ["HF_HOME"] = str(_TMP_DATA / "models" / "hf")
 os.environ.setdefault("WHISPERX_DEVICE", "cpu")
 os.environ.setdefault("WHISPERX_COMPUTE_TYPE", "int8")
+os.environ.setdefault("ASR_BACKEND", "whisperx")
 
 
 @pytest.fixture(scope="session")

@@ -145,4 +145,31 @@ def _json_default(obj: Any) -> Any:
         return str(obj)
 
 
-pipeline = TranscribePipeline()
+def _build_asr_backend() -> ASRBackend:
+    if settings.asr_backend == "whisperx":
+        return LocalWhisperXASR()
+    if settings.asr_backend == "router":
+        from app.asr import ASRRouter, SpeachesASR
+        hosts = [h.strip() for h in settings.asr_hosts.split(",") if h.strip()]
+        if not hosts:
+            log.warning("ASR_BACKEND=router but ASR_HOSTS is empty; using LocalWhisperXASR")
+            return LocalWhisperXASR()
+        backends: list[ASRBackend] = []
+        for h in hosts:
+            if h == "local-whisperx":
+                backends.append(LocalWhisperXASR())
+            elif h.startswith("http://") or h.startswith("https://"):
+                backends.append(SpeachesASR(
+                    base_url=h,
+                    model_id=settings.asr_model_id,
+                    healthcheck_timeout_s=settings.asr_healthcheck_timeout_s,
+                ))
+            else:
+                log.warning("Ignoring unrecognized ASR_HOSTS entry: %r", h)
+        if not backends:
+            return LocalWhisperXASR()
+        return ASRRouter(backends)
+    raise ValueError(f"Unknown ASR_BACKEND={settings.asr_backend!r}; expected 'whisperx' or 'router'")
+
+
+pipeline = TranscribePipeline(asr=_build_asr_backend())

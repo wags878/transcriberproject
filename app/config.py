@@ -32,6 +32,33 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, alias="APP_PORT")
     max_upload_mb: int = Field(default=500, alias="MAX_UPLOAD_MB")
 
+    # --- Phase 3: ASR routing ---
+    # 'whisperx' — in-container WhisperX only (Phase 2 behavior; default).
+    # 'router'   — try backends in ASR_HOSTS order; sentinel 'local-whisperx'
+    #              means "fall back to in-container WhisperX".
+    asr_backend: str = Field(default="whisperx", alias="ASR_BACKEND")
+
+    # Comma-separated priority list. URL entries are OpenAI-compat backends
+    # (Speaches, whisper.cpp server). The sentinel 'local-whisperx' means
+    # in-container WhisperX. Example:
+    #   ASR_HOSTS=http://localhost:8001,http://mbp.tailnet.ts.net:8001,local-whisperx
+    asr_hosts: str = Field(default="", alias="ASR_HOSTS")
+
+    # HuggingFace model ID to pass to OpenAI-compat backends. Ignored for
+    # local-whisperx (which uses WHISPER_MODEL instead).
+    asr_model_id: str = Field(
+        default="Systran/faster-whisper-large-v3",
+        alias="ASR_MODEL_ID",
+    )
+
+    # Health-check timeout per backend in seconds.
+    asr_healthcheck_timeout_s: float = Field(default=2.0, alias="ASR_HEALTHCHECK_TIMEOUT_S")
+
+    # Tailscale sidecar reusable auth key. Only consumed by the tailscale
+    # container itself; the app never reads it. Kept in Settings so a
+    # missing value is a clear config error at startup.
+    ts_authkey: str = Field(default="", alias="TS_AUTHKEY")
+
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
