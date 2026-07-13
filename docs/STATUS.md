@@ -461,3 +461,49 @@ memory).
 **Deferred / on deck:** Track B live-enable (needs an operator therapist clip),
 Infra I (GPU diarization), output-language phase 2 (translation model), Track C.
 
+---
+
+## 2026-07-13 — Infra I: GPU diarization sidecar (deployed)
+
+Moved the pipeline's dominant cost — pyannote diarization — off CPU and onto the
+RTX 5090. Branch `infra-gpu-diarization`.
+
+**Why a sidecar, not in-process:** the 5090 is Blackwell (sm_120) and needs
+torch ≥2.7 / cu128, but transcribe-svc pins torch 2.0.1+cu117 (sm_90 max) because
+pyannote.audio 3.1.1 forces it (B-003). Upgrading in place detonates the chain.
+So it's split out like Speaches ASR: a `diarize-svc` container with a modern CUDA
+stack (torch 2.8+cu128, pyannote.audio 3.3.2) exposing `POST /diarize` on the
+shared tailscale netns (127.0.0.1:8002). transcribe-svc's pins are untouched.
+Notably `lightning` is **no longer quarantined** on PyPI, so modern pyannote
+installs cleanly now.
+
+**Before/after (realtime factor = audio_seconds / wall_seconds, warm):**
+
+| Path | Clip | Wall | Realtime factor |
+|---|---|---|---|
+| Before — CPU diarization (STATUS 2026-07-12) | 145.9 s | ~51 s | ~2.85× |
+| After — GPU diarization sidecar | 88.8 s | 8.1 s | **~10.9×** |
+| After — GPU diarization sidecar | 834 s | 96.2 s | **~8.7×** |
+
+`diarize_device: cuda` confirmed in the transcript header; the sidecar logs
+`POST /diarize 200`. The realtime factor now clears the plan's ≥8× target (the
+longer the clip, the more diarization dominates, so 8.7× on 14 min vs 10.9× on
+90 s).
+
+**CPU fallback (operator requirement) — verified live:** with the sidecar
+stopped, a transcription still succeeded with `diarize_device: cpu-fallback` and
+correct speaker count. RemoteDiarizer health-checks per request and falls back to
+in-process CPU pyannote on any sidecar failure; 4 unit tests cover it.
+
+**Build gotchas (diarize-svc image) for next time:**
+- pyannote 3.3.2 calls `hf_hub_download(use_auth_token=...)`, removed in new
+  huggingface_hub → pin `huggingface_hub==0.25.2`.
+- pyannote imports `matplotlib` at pipeline-load but doesn't pull it → add it.
+- torch 2.6+ defaults `torch.load(weights_only=True)`, which rejects pyannote
+  checkpoints (lightning passes `weights_only=True` *explicitly*) → the sidecar
+  force-patches `torch.load` to `weights_only=False` (trusted HF checkpoint).
+
+**Deferred / on deck:** Track B live-enable (operator clip), output-language
+phase 2 (translation model), Track C. Both GPU services (Speaches + diarize)
+share the one 5090; VRAM headroom is fine for large-v3 + pyannote.
+

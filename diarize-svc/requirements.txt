@@ -10,6 +10,11 @@ torchaudio==2.8.0
 # 2.0.x) and still loads the pyannote/speaker-diarization-3.1 pipeline, so
 # diarization accuracy is comparable to the CPU path for the before/after.
 pyannote.audio==3.3.2
+# pyannote 3.3.2 still calls hf_hub_download(use_auth_token=...), which newer
+# huggingface_hub removed. Pin to a version that still accepts it.
+huggingface_hub==0.25.2
+# pyannote imports matplotlib at pipeline-load time but doesn't always pull it.
+matplotlib==3.9.2
 
 fastapi==0.115.5
 uvicorn[standard]==0.32.1

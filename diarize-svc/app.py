@@ -37,6 +37,22 @@ _state: dict[str, Any] = {"pipeline": None, "device": "cpu"}
 
 def _load_pipeline() -> None:
     import torch
+
+    # torch 2.6+ flipped torch.load's default to weights_only=True, which rejects
+    # pyannote 3.x checkpoints (they pickle globals like TorchVersion). We load a
+    # known, trusted checkpoint from HuggingFace, so restore the old behavior for
+    # this sidecar's loads. Blackwell (sm_120) forces torch >= 2.7, so we can't
+    # just pin an older torch to avoid this.
+    _orig_load = torch.load
+
+    def _trusting_load(*args: Any, **kwargs: Any):
+        # Force (not setdefault) — lightning_fabric passes weights_only=True
+        # explicitly, so a default wouldn't win.
+        kwargs["weights_only"] = False
+        return _orig_load(*args, **kwargs)
+
+    torch.load = _trusting_load  # type: ignore[assignment]
+
     from pyannote.audio import Pipeline
 
     pipeline = Pipeline.from_pretrained(MODEL, use_auth_token=HF_TOKEN)
