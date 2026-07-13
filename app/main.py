@@ -9,11 +9,19 @@ from typing import AsyncIterator
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+import json
+
 from app import storage
 from app.auth import bearer_auth
 from app.config import settings
 from app.pipeline import pipeline, render_json, render_txt
-from app.schemas import HealthResponse, StorageResponse, TranscribeResponse
+from app.relabel import apply_speaker_labels
+from app.schemas import (
+    HealthResponse,
+    RelabelRequest,
+    StorageResponse,
+    TranscribeResponse,
+)
 
 log = logging.getLogger("transcribe-svc")
 logging.basicConfig(
@@ -141,6 +149,34 @@ async def get_transcript_json(job_id: str) -> FileResponse:
     if paths is None or not paths[1].exists():
         raise HTTPException(status_code=404, detail="transcript not found")
     return FileResponse(paths[1], media_type="application/json")
+
+
+@app.post(
+    "/v1/results/{job_id}/relabel",
+    dependencies=[Depends(bearer_auth)],
+)
+async def relabel_speakers(job_id: str, req: RelabelRequest) -> JSONResponse:
+    """Manually overwrite speaker labels for a completed transcript.
+
+    The client sends one final speaker label per segment (in order); we persist
+    it back to the stored .txt and .json so downloads and history reflect the
+    edit. The always-available manual override for imperfect auto-labeling.
+    """
+    paths = storage.transcript_paths(job_id)
+    if paths is None or not paths[1].exists():
+        raise HTTPException(status_code=404, detail="transcript not found")
+    txt_path, json_path = paths
+    doc = json.loads(json_path.read_text(encoding="utf-8"))
+    try:
+        updated = apply_speaker_labels(doc, req.speakers)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    json_path.write_text(
+        json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    txt_path.write_text(render_txt(updated), encoding="utf-8")
+    log.info("Job %s relabeled: %d speakers", job_id, updated["speakers_detected"])
+    return JSONResponse(content=updated)
 
 
 @app.get(

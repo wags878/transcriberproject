@@ -23,3 +23,8 @@ class StorageResponse(BaseModel):
     uploads_mb: float = Field(ge=0)
     outputs_mb: float = Field(ge=0)
     models_mb: float = Field(ge=0)
+
+
+class RelabelRequest(BaseModel):
+    """Manual speaker relabel: one final speaker label per segment, in order."""
+    speakers: list[str] = Field(..., min_length=0)
