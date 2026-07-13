@@ -307,3 +307,17 @@ highest-value optimization). Cold first request is dominated by model load
 Measured via `docker exec` curl inside the netns; `MAX_CONCURRENT_JOBS=1`, so
 concurrent uploads serialize.
 
+---
+
+## 2026-07-12 — Session handoff (repo-tracked)
+
+After Phase 3 deploy: added a demo-quality PWA web client (`app/static`, served
+at `/`, published on `localhost:8000`), synthetic sample clips (`samples/`, served
+at `/samples`), a network-first service worker, and refreshed README/API/DEPLOY.
+Confirmed accepted audio = anything ffmpeg decodes; the ML track and
+storage/multi-user direction are captured as plans/specs.
+
+**Current state, how to resume, the agreed next task (ML Track A eval harness),
+open threads, and host/tooling notes are in `docs/HANDOFF.md`** — the
+repo-tracked cold-pickup brief. Read that first on resume.
+

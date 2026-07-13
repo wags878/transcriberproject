@@ -6,6 +6,8 @@ A privately-hosted HTTP service that accepts audio recordings, transcribes them 
 
 ## Status
 
+**Picking up cold?** Start with **`docs/HANDOFF.md`** — current state, how to run, and the agreed next task.
+
 Phase 3 complete and **deployed on GPU**. Runs as a three-container stack on the Alienware host (Windows 11 + WSL2 + Docker Desktop, RTX 5090): a Tailscale sidecar, **Speaches** serving `faster-whisper-large-v3` on the GPU, and the FastAPI service doing diarization + orchestration on CPU. ASR is health-checked with a fallback to in-container WhisperX (CPU). See `docs/STATUS.md` for the running phase log and `docs/BLOCKERS.md` for open issues.
 
 ## Quick start (GPU stack — current deployment)
