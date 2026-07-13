@@ -118,6 +118,7 @@ Auth: required.
   "compute_type": "int8",
   "device": "cpu",
   "diarization_model": "pyannote/speaker-diarization-3.1",
+  "diarize_device": "cuda",
   "segments": [
     {
       "start": 0.0,
@@ -203,8 +204,24 @@ The backend that served each request is reported in the response body's
 `asr_backend` field and in the `.json` transcript header — useful when
 diagnosing fallback drift.
 
-Diarization always runs in-container via pyannote; the ASR backend only affects
-speech-to-text.
+## Diarization backend selection
+
+Diarization (pyannote) is the pipeline's dominant cost and is chosen at startup
+via env `DIARIZE_BACKEND`:
+
+- **`DIARIZE_BACKEND=local`** (default) — in-process pyannote on **CPU**. Phase
+  2/3 behavior; the only option where transcribe-svc's frozen torch pin applies.
+- **`DIARIZE_BACKEND=remote`** — offload to the **GPU `diarize-svc` sidecar**
+  (`DIARIZE_URL`, e.g. `http://127.0.0.1:8002`), a separate container with a
+  modern Blackwell-capable CUDA torch + pyannote. Per request it health-checks
+  the sidecar and **falls back to in-process CPU pyannote** if it's unreachable,
+  so a GPU/sidecar outage degrades speed but never fails a job.
+
+The device that actually ran diarization is reported in the `.json` header's
+`diarize_device` (`cuda`, `cpu`, or `cpu-fallback`). The GPU compose
+(`docker-compose.gpu.yml`) wires `remote` automatically; the sidecar mirrors the
+Speaches split (shared tailscale netns, binds `127.0.0.1:8002`, never
+tailnet-published).
 
 ---
 

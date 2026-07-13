@@ -10,7 +10,7 @@ from typing import Any
 
 from app.asr import ASRBackend, ASRResult, LocalWhisperXASR
 from app.config import settings
-from app.diarize import Diarizer
+from app.diarize import Diarizer, RemoteDiarizer, build_diarizer
 from app.stitch import stitch_speakers
 
 log = logging.getLogger("transcribe-svc.pipeline")
@@ -27,10 +27,10 @@ class TranscribePipeline:
     def __init__(
         self,
         asr: ASRBackend | None = None,
-        diarizer: Diarizer | None = None,
+        diarizer: "Diarizer | RemoteDiarizer | None" = None,
     ) -> None:
         self._asr: ASRBackend = asr or LocalWhisperXASR()
-        self._diarizer: Diarizer = diarizer or Diarizer()
+        self._diarizer: Diarizer | RemoteDiarizer = diarizer or build_diarizer()
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
         self._loaded = False
         self._load_lock = asyncio.Lock()
@@ -98,6 +98,7 @@ class TranscribePipeline:
                 "elapsed_seconds": elapsed,
                 "asr_backend": served_by,
                 "asr_model": asr_result.model,
+                "diarize_device": getattr(self._diarizer, "last_device", settings.whisperx_device),
                 "task": task,
                 # For translate, the segment text is English regardless of the
                 # detected source `language`.
@@ -152,6 +153,7 @@ def render_json(job_id: str, result: dict[str, Any]) -> str:
         "compute_type": settings.whisperx_compute_type,
         "device": settings.whisperx_device,
         "diarization_model": settings.diarization_model,
+        "diarize_device": result.get("diarize_device"),
         "asr_backend": result.get("asr_backend"),
         "segments": result.get("segments", []),
     }

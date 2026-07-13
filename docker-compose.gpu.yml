@@ -90,6 +90,45 @@ services:
       start_period: 900s
       retries: 3
 
+  diarize-svc:
+    container_name: transcribe-svc-diarize
+    build:
+      context: ./diarize-svc
+      dockerfile: Dockerfile
+    image: transcribe-svc-diarize:cuda
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    # Shares the tailscale netns like speaches; binds 127.0.0.1:8002, reachable
+    # only by transcribe-svc (never tailnet-published).
+    network_mode: service:tailscale
+    env_file:
+      - .env
+    environment:
+      # pyannote diarization model + HF token (gated model needs conditions
+      # accepted). Same values the local path uses.
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-3.1}
+      HF_HOME: /data/hf
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - diarize_models:/data/hf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/health"]
+      interval: 30s
+      timeout: 5s
+      # First boot downloads the pyannote pipeline weights; keep it out of
+      # "unhealthy" while that runs.
+      start_period: 300s
+      retries: 3
+
   transcribe-svc:
     container_name: transcribe-svc
     build:
@@ -105,12 +144,21 @@ services:
       # falls back to CPU until the GPU backend is ready, then uses the GPU.
       speaches:
         condition: service_started
+      # Likewise service_started: diarization has a local CPU fallback, so the
+      # sidecar's first-run model download must not block startup. The
+      # RemoteDiarizer health-checks per request and falls back to CPU.
+      diarize-svc:
+        condition: service_started
     network_mode: service:tailscale
     env_file:
       - .env
     environment:
       ASR_BACKEND: router
       ASR_HOSTS: "http://127.0.0.1:8001,local-whisperx"
+      # Offload diarization to the GPU sidecar; falls back to in-process CPU
+      # pyannote if the sidecar is unreachable.
+      DIARIZE_BACKEND: remote
+      DIARIZE_URL: "http://127.0.0.1:8002"
     volumes:
       - models:/data/models
       - uploads:/data/uploads
@@ -126,6 +174,7 @@ services:
 volumes:
   tailscale_state:
   speaches_models:
+  diarize_models:
   models:
   uploads:
   outputs:

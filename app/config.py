@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     )
     hf_token: str = Field(default="", alias="HF_TOKEN")
 
+    # Diarization backend. 'local' — in-process pyannote on CPU (default,
+    # Phase 2/3 behavior). 'remote' — offload to the GPU diarize-svc sidecar at
+    # DIARIZE_URL, with a per-request fallback to local CPU if it's unreachable.
+    diarize_backend: str = Field(default="local", alias="DIARIZE_BACKEND")
+    diarize_url: str = Field(default="", alias="DIARIZE_URL")
+    diarize_healthcheck_timeout_s: float = Field(
+        default=3.0, alias="DIARIZE_HEALTHCHECK_TIMEOUT_S"
+    )
+
     max_concurrent_jobs: int = Field(default=1, alias="MAX_CONCURRENT_JOBS")
     retain_days: int = Field(default=30, alias="RETAIN_DAYS")
 
