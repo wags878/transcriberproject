@@ -59,6 +59,15 @@ audio already exists (see `samples/` + `samples/README.md`).
   (Phase 4). 
 - Therapist voice enrollment (ML Track B); GPU diarization (ML Infra) — the
   highest-ROI latency win.
+- **Doc governance (anti-drift).** Docs are the source of truth; keep them from
+  drifting (we already hit it — README said "Phase 1" while deployed on GPU).
+  Plan: a short `GOVERNANCE.md` (standing rule: every PR reconciles docs + a
+  doc-impact map of which code area touches which docs), a
+  `.github/pull_request_template.md` checklist, and a Claude Code `/doc-review`
+  command/skill that reviews the PR diff against the docs semantically and
+  proposes fixes — run it as a **pre-merge gate**, not after close. CI can only
+  flag "code changed, docs didn't"; it can't verify accuracy, so the review
+  (agent or human) is the real check.
 
 ## Host / tooling notes (this Alienware, Windows)
 
