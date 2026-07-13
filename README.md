@@ -6,9 +6,11 @@ A privately-hosted HTTP service that accepts audio recordings, transcribes them 
 
 ## Status
 
-**Picking up cold?** Start with **`docs/HANDOFF.md`** — current state, how to run, and the agreed next task.
+**Picking up cold?** Start with **`docs/HANDOFF.md`** — current state, how to run, and the next task.
 
-Phase 3 complete and **deployed on GPU**. Runs as a three-container stack on the Alienware host (Windows 11 + WSL2 + Docker Desktop, RTX 5090): a Tailscale sidecar, **Speaches** serving `faster-whisper-large-v3` on the GPU, and the FastAPI service doing diarization + orchestration on CPU. ASR is health-checked with a fallback to in-container WhisperX (CPU). See `docs/STATUS.md` for the running phase log and `docs/BLOCKERS.md` for open issues.
+All work is **merged to `main`** and **deployed on GPU**. Runs as a **four-container** stack on the Alienware host (Windows 11 + WSL2 + Docker Desktop, RTX 5090): a Tailscale sidecar, **Speaches** (`faster-whisper-large-v3` ASR on GPU), a **`diarize-svc`** pyannote diarization sidecar (GPU), and the FastAPI orchestrator. ASR and diarization are each health-checked with **per-request CPU fallback**, so a GPU/sidecar outage degrades speed but never fails a job. Served over **HTTPS on the tailnet** (`tailscale serve`, valid Let's Encrypt cert). Throughput ~8.7–10.9× realtime. See `docs/STATUS.md` for the running phase log and `docs/BLOCKERS.md` for open issues.
+
+The PWA client adds an **Audio language** selector (default English), an **Output** selector (*Same as audio* / *English translate*), and post-transcription **speaker editing** (rename / reassign). This is a **patient-owned** recorder for any patient↔provider interaction, not just therapy — role labels are generic.
 
 ## Quick start (GPU stack — current deployment)
 
@@ -23,7 +25,7 @@ Phase 3 complete and **deployed on GPU**. Runs as a three-container stack on the
    ```sh
    docker compose -f docker-compose.gpu.yml up -d --build
    ```
-3. Open the **web client** at <http://localhost:8000> (published on the host loopback), or over the tailnet at `http://transcribe-svc.<your-tailnet>.ts.net:8000`. Paste your token in ⚙ Settings, then drop in an audio file / record / click a sample.
+3. Open the **web client** at <http://localhost:8000> (host loopback), or over the tailnet at **`https://transcribe-svc.<your-tailnet>.ts.net`** (HTTPS, no port — required for mic recording + PWA install on iPhone; enable once with `docker compose -f docker-compose.gpu.yml exec tailscale tailscale serve --bg 8000`). Paste your token in ⚙ Settings, then drop in an audio file / record / click a sample.
 4. Or hit the API directly:
    ```sh
    TOKEN=$(grep ^API_TOKEN .env | cut -d= -f2-)
@@ -41,7 +43,7 @@ Full API contract: `docs/API.md`. Deployment (incl. the Windows/WSL2 GPU setup):
 
 ## Architecture
 
-`transcribe()` runs ASR (any `ASRBackend`) and pyannote diarization concurrently (`asyncio.gather`), then `stitch_speakers()` joins turns onto ASR segments — see `app/pipeline.py`, `app/asr.py`, `app/diarize.py`, `app/stitch.py`. Backend selection is `ASR_BACKEND` / `ASR_HOSTS` (see `docs/API.md`).
+`transcribe()` runs ASR (any `ASRBackend`) and diarization (`Diarizer` local CPU, or `RemoteDiarizer` → the GPU `diarize-svc` sidecar) concurrently (`asyncio.gather`), then `stitch_speakers()` joins turns onto ASR segments — see `app/pipeline.py`, `app/asr.py`, `app/diarize.py`, `app/stitch.py`. Backend selection: `ASR_BACKEND`/`ASR_HOSTS` for speech-to-text, `DIARIZE_BACKEND`/`DIARIZE_URL` for diarization (both documented in `docs/API.md`). Offline ML tooling (eval harness, voice enrollment) lives under `ml/` and only touches the service over HTTP.
 
 Designs and execution plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/`; the running log is `docs/STATUS.md`.
 
@@ -53,14 +55,16 @@ transcribe-svc/
 ├── NOTICE                    upstream component attributions
 ├── LICENSE                   proprietary, all rights reserved
 ├── .env.example              copy to .env; never commit .env
-├── docker-compose.yml        default = CPU profile
+├── docker-compose.yml        default = CPU profile (old-server fallback)
 ├── docker-compose.cpu.yml    explicit CPU overlay
-├── docker-compose.gpu.yml    GPU stack (tailscale + speaches + transcribe-svc)
+├── docker-compose.gpu.yml    GPU stack (tailscale + speaches + diarize-svc + transcribe-svc)
 ├── docker/
-│   ├── Dockerfile.cpu        the image (used by all profiles)
+│   ├── Dockerfile.cpu        the service image (used by all profiles)
 │   └── entrypoint.sh
+├── diarize-svc/              GPU diarization sidecar (FastAPI + pyannote, cu128)
 ├── app/                      FastAPI service code
 │   └── static/               installable PWA web client (served at /)
+├── ml/                       offline ML tooling (eval harness, voice enrollment)
 ├── samples/                  synthetic demo clips (served at /samples)
 ├── tests/                    pytest suite
 └── docs/

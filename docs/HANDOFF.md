@@ -2,120 +2,128 @@
 
 > **Read this first if you're picking up cold** (fresh clone, new machine, new
 > person, or a fresh agent). This file lives in the repo on purpose — it does
-> not depend on any external memory. Last updated **2026-07-12**.
+> not depend on any external memory. Last updated **2026-07-13**.
 
 ## TL;DR
 
-Phase 3 is **done and deployed on GPU**. The three-container stack runs on the
-Alienware (Windows 11 + WSL2 + Docker Desktop + RTX 5090). Branch
-`phase-3-gpu`, **PR #1** open to `main`, working tree clean. A demo-quality PWA
-web client is live. **Agreed next task: ML Track A — the synthetic eval
-harness** (below).
+Everything is now **merged to `main`** (merge commit `a35939c`) and deployed on
+the Alienware (Windows 11 + WSL2 + Docker Desktop + **RTX 5090**). The GPU stack
+is a **four-container** compose, served over **HTTPS on the tailnet**. A PWA web
+client is live with language/output/speaker-edit controls. **72 tests pass.**
+The next feature is **Track B live-enable** (needs one operator reference clip);
+see "Next".
 
-## Current state
+This is a **patient-owned** recorder for **any** patient↔provider interaction
+(doctor, therapist, dentist, coach, …) — "flipping the script" on doctor-facing
+AI scribes. Roles are generic (enroll any name + `CLIENT_LABEL`). PHI is
+HIPAA-grade → local-only posture, synthetic-only ML rule.
 
-- **Running:** `docker compose -f docker-compose.gpu.yml up -d` → `tailscale`
-  sidecar + **Speaches** (`faster-whisper-large-v3` on the GPU) + `transcribe-svc`
-  (FastAPI: pyannote diarization + orchestration on CPU, WhisperX CPU fallback).
-  All three healthy. Model is downloaded (persists in the `speaches_models`
-  Docker volume via `PRELOAD_MODELS`).
-- **Access:** web client + API at `http://localhost:8000` (host loopback,
-  published by the GPU compose) and over the tailnet at
-  `http://transcribe-svc.<tailnet>.ts.net:8000` (http on :8000, not https).
-- **Verified:** ASR on GPU (`asr_backend=speaches@…`, `large-v3`), CPU fallback
-  when Speaches is down, diarization on 1/2/3-speaker synthetic clips, 7 audio
-  formats. Throughput ~2.85× realtime warm (bottleneck = CPU diarization). See
-  the `docs/STATUS.md` Phase 3 close-out + throughput baseline.
-- **Tests:** 39 passing. Run them without the heavy stack in the no-torch venv
-  (see `docs/DEPLOY.md` → "Running the unit tests on the Alienware"), or inside
-  the image: `docker compose -f docker-compose.gpu.yml run --rm transcribe-svc pytest tests/`.
+## Current state — the GPU stack
 
-To bring it up / verify from scratch: `README.md` Quick start + `docs/DEPLOY.md`.
+`docker compose -f docker-compose.gpu.yml up -d` brings up **four** containers:
+
+| Container | Role | Device |
+|---|---|---|
+| `tailscale` | netns owner; publishes `127.0.0.1:8000`; **HTTPS via `tailscale serve`** | — |
+| `speaches` | ASR (`faster-whisper-large-v3`), OpenAI-compat on `127.0.0.1:8001` | **GPU** |
+| `diarize-svc` | pyannote diarization sidecar on `127.0.0.1:8002` (torch cu128) | **GPU** |
+| `transcribe-svc` | FastAPI orchestrator + PWA; routes ASR→speaches, diarization→diarize-svc | CPU (orchestration) |
+
+- **Access:** PWA + API at `http://localhost:8000` (host loopback) and, over the
+  tailnet, at **`https://transcribe-svc.<tailnet>.ts.net`** (valid Let's Encrypt
+  cert via `tailscale serve` — mic recording + PWA install work on iPhone). The
+  serve config persists in the `tailscale_state` volume. Turn off with
+  `tailscale serve --https=443 off`.
+- **Throughput:** ~8.7–10.9× realtime warm (GPU diarization). Was ~2.85× on CPU.
+- **Both GPU features fall back to CPU** per request if their sidecar is down
+  (`diarize_device: cpu-fallback`, `asr_backend: local-whisperx`) — an outage
+  degrades speed but never fails a job.
+
+To bring up / verify from scratch: `README.md` Quick start + `docs/DEPLOY.md`.
+
+## What's live (features)
+
+- **ASR router** — `ASR_BACKEND=router` tries speaches (GPU) then local WhisperX (CPU).
+- **GPU diarization sidecar** — `DIARIZE_BACKEND=remote` → `diarize-svc`, CPU fallback.
+- **PWA** — speaker-colored transcript, click-to-seek, mic record (needs HTTPS),
+  **Audio language** selector (default English — stops Whisper mis-detecting e.g.
+  Welsh on an unfiltered intro), **Output** selector (*Same as audio* /
+  *English translate*), and **✎ Edit speakers** (rename across transcript /
+  reassign a turn; persists via `POST /v1/results/{id}/relabel`).
+- **Output language phase 1** — `task=transcribe|translate` (Whisper does
+  source-lang or English only; arbitrary targets = phase 2, not built).
+- **Track B (voice enrollment)** — built, **off by default** (`ENABLE_ROLE_LABELS=0`).
+
+## Fallback to the old CPU server (Proxmox VM)
+
+`main` still runs on a CPU-only host because **every GPU feature is opt-in and
+defaults to CPU**. To fall back:
+
+```
+docker compose up -d          # NOT the gpu compose — this is docker-compose.yml (CPU)
+```
+
+That uses `ASR_BACKEND=whisperx` (in-process CPU), `DIARIZE_BACKEND=local`
+(in-process CPU pyannote), role labels off, `task=transcribe`. The `diarize-svc`
+sidecar exists **only** in `docker-compose.gpu.yml` and is never referenced by the
+CPU compose. Carry over the same `.env` (secrets below). Slower (no GPU), fully
+functional — the same path Phase 1/2 ran on that box.
 
 ## Secrets (not in the repo)
 
-`.env` is **gitignored**. A cold clone must re-provide: `API_TOKEN`,
-`HF_TOKEN` (HuggingFace, pyannote conditions accepted),
-`TS_AUTHKEY` (reusable, `tag:transcribe-svc`), and
-`DIARIZATION_MODEL=pyannote/speaker-diarization-3.1`. `.env.example` documents
-all keys. On the current Alienware host these are already set.
+`.env` is **gitignored**. A cold clone must re-provide: `API_TOKEN`, `HF_TOKEN`
+(HuggingFace, pyannote conditions accepted for `speaker-diarization-3.1` +
+`segmentation-3.0`), `TS_AUTHKEY` (reusable, `tag:transcribe-svc`),
+`DIARIZATION_MODEL=pyannote/speaker-diarization-3.1`. `.env.example` documents all
+keys. On the current Alienware host these are already set. Current API token is in
+the operator's `.env` (single shared bearer; rotate freely).
 
-## ML Track A → DONE (2026-07-12, branch `ml-eval-harness`)
+## Next task → ML Track B live-enable (needs one operator clip)
 
-The synthetic eval harness is built under `ml/` and the first baseline is
-committed (`ml/eval/reports/2026-07-12-baseline.md`). Containerized — run it with
-the stack up:
+Track B code is done and off by default. To turn it on:
+1. The image already ships `app/embed.py` + `app/roles.py` (merged to main; rebuild
+   transcribe-svc if the running container predates it).
+2. **Enroll the PATIENT's voice** (not the provider — the patient holds the app and
+   can record a solo clip easily; the provider is inferred as the other speaker):
+   ```
+   docker compose -f docker-compose.gpu.yml run --rm -v ${PWD}/ml:/app/ml \
+     transcribe-svc python -m ml.enroll.enroll --name "You" --clip <ref.wav> --out-dir /data/enrollments
+   ```
+3. Set `ENABLE_ROLE_LABELS=1` (and `CLIENT_LABEL=Patient`/`Doctor`/… to taste) in
+   `.env`, then `docker compose -f docker-compose.gpu.yml up -d`.
+4. **Re-sweep the threshold on real voices** before trusting it — synthetic voices
+   separate more cleanly than real ones (`python -m ml.enroll.sweep`).
 
-```
-docker compose -f docker-compose.gpu.yml up -d          # service
-docker compose -f ml/docker-compose.ml.yml run --rm ml-eval   # generate → score → scorecard
-```
+## Other on-deck (not started)
 
-Baseline over 4 synthetic clips: mean WER **0.0%** (real, but synthetic-clean →
-optimistic), mean speaker-attribution **81.1%**, speaker-count 4/4. See
-`ml/README.md` for metrics + honesty caveats and the STATUS 2026-07-12 Track A
-close-out. Gotcha: edge-tts is pinned to **7.2.8** (6.x now 403s on Microsoft's
-endpoint).
-
-## ML Track B → DONE (2026-07-12, branch `track-b-voice-enrollment`, stacked on `ml-eval-harness`)
-
-Voice enrollment → auto-label `Therapist` (+ inferred `Client` in a 2-speaker
-session), **off by default** (`ENABLE_ROLE_LABELS=0`); `/v1` contract unchanged
-when off. Embedding is pyannote's wespeaker — **no new service deps** (rides the
-existing pyannote/torch stack). `app/embed.py` + `app/roles.py` (flag-gated in the
-pipeline); enrollment/sweep tooling under `ml/enroll/`. Threshold sweep shows
-clean separation (genuine 0.85–0.92 vs impostor 0.16–0.23; default 0.5); e2e
-acceptance PASSes. Full test suite **53 passing**.
-
-To actually enable it (the running prod container predates this code, flag off):
-```
-docker compose -f docker-compose.gpu.yml build transcribe-svc        # ships embed.py/roles.py
-docker compose -f docker-compose.gpu.yml run --rm -v ${PWD}/ml:/app/ml -v ${PWD}/app:/app/app \
-    transcribe-svc python -m ml.enroll.enroll --name Therapist --clip <ref.wav> --out-dir /data/enrollments
-# set ENABLE_ROLE_LABELS=1 in .env, then: docker compose -f docker-compose.gpu.yml up -d
-```
-Re-sweep the threshold on real (consented) voices before trusting it — synthetic
-voices separate more cleanly than real ones.
-
-## Next task → ML Infra I (GPU diarization) or Track C (LoRA scaffold)
-
-Per **`docs/superpowers/plans/2026-07-12-ml-eval-and-training.md`**. Infra I is the
-highest-ROI systems win: move pyannote diarization to CUDA to break the ~2.85×
-realtime ceiling (ASR is ~14×) and lift the ~19% attribution loss Track A
-measured. Track C is the LoRA fine-tuning scaffold (smoke-run on synthetic; real
-gains wait for consented data). Re-measure any change with Track A's harness.
-
-## Open threads (on deck, not started)
-
-- `tailscale serve` → HTTPS so the PWA (mic recording + install) works fully on
-  iPhone over the tailnet.
-- Friendly `415` guard on undecodable uploads (currently a generic `500`).
-- Storage / multi-user: pluggable `StorageBackend`, per-user namespacing, cloud
-  (Drive/OneDrive) PHI/BAA caveat — design-doc first, gated on multi-user auth
-  (Phase 4). 
-- Therapist voice enrollment (ML Track B); GPU diarization (ML Infra) — the
-  highest-ROI latency win.
-- **Doc governance (anti-drift).** Docs are the source of truth; keep them from
-  drifting (we already hit it — README said "Phase 1" while deployed on GPU).
-  Plan: a short `GOVERNANCE.md` (standing rule: every PR reconciles docs + a
-  doc-impact map of which code area touches which docs), a
-  `.github/pull_request_template.md` checklist, and a Claude Code `/doc-review`
-  command/skill that reviews the PR diff against the docs semantically and
-  proposes fixes — run it as a **pre-merge gate**, not after close. CI can only
-  flag "code changed, docs didn't"; it can't verify accuracy, so the review
-  (agent or human) is the real check.
+- **Output-language phase 2** — arbitrary target languages via a local translation
+  model (NLLB/M2M-100) as a post-pass, kept local for PHI.
+- **Track C** — Whisper LoRA fine-tuning scaffold (smoke-run on synthetic; real
+  gains wait for consented data). Re-measure any change with Track A's harness.
+- **Storage / multi-user** — pluggable `StorageBackend`, per-user namespacing,
+  cloud PHI/BAA caveat — design-doc first, gated on multi-user auth (Phase 4).
+- **Friendly `415`** on undecodable uploads (currently generic `500`).
+- **Doc governance (anti-drift)** — a `GOVERNANCE.md` standing rule + PR-template
+  checklist + a `/doc-review` pre-merge gate. Docs are the source of truth.
 
 ## Host / tooling notes (this Alienware, Windows)
 
-- No-torch unit-test venv: `~/venvs/tsl` in WSL (bootstrapped with `get-pip.py`
-  — `python3-venv` ensurepip is stripped and there's no passwordless sudo).
-- `docker cp` needs **Windows-style paths** run from PowerShell; git-bash
-  `/c/...` paths silently produce an unreadable file (curl exit 26). `docker` is
-  not on git-bash PATH — use `"/c/Program Files/Docker/.../docker.exe"` or PowerShell.
+- **No Python on the host.** Run unit tests in the WSL no-torch venv:
+  `wsl -e bash -lc 'source ~/venvs/tsl/bin/activate && python -m pytest tests/ -q'`
+  (bootstrapped via get-pip; `python3-venv` ensurepip is stripped, no passwordless sudo).
+  Or inside the image: `docker compose -f docker-compose.gpu.yml run --rm transcribe-svc pytest tests/`.
+- **`docker` is not on any PATH.** Use `"/c/Program Files/Docker/Docker/resources/bin/docker.exe"`.
+  From **PowerShell** you must also prepend that dir to `$env:PATH` or the
+  **`docker-credential-desktop` helper isn't found** and builds fail on "getting credentials".
+- **No `gh` CLI** (Windows or WSL). Open PRs via the GitHub web UI / the push URL.
 - PowerShell 5.1 flips `$?` to false on any native-command stderr, so BuildKit
-  progress reads as a false "build failed" — check the log for `naming to … Built`.
-- The web client's service worker is **network-first** — deploys show up on a
-  normal reload; a hard refresh (`Ctrl+Shift+R`) clears any old cached shell.
-- ML honesty rule (from the plan): pure-synthetic ASR fine-tuning misleads
-  (distribution shift). Synthetic is for pipeline/eval + domain-vocab
-  augmentation; real accuracy gains need real (consented) audio.
+  progress reads as a false "build failed" — check for `… Built` in the log.
+- The service worker is **network-first + `cache:"no-store"`** — deploys show up on
+  the next load. A browser that still has the *old* SW controlling needs **one**
+  hard refresh (`Ctrl+Shift+R`); after that it self-updates.
+- **diarize-svc build gotchas** (Blackwell/modern stack): pin `huggingface_hub==0.25.2`
+  (pyannote 3.3.2 passes `use_auth_token`), add `matplotlib`, and the app force-patches
+  `torch.load(weights_only=False)` (torch 2.6+ default rejects the pyannote checkpoint).
+- ML honesty rule: pure-synthetic ASR fine-tuning misleads (distribution shift);
+  synthetic is for pipeline/eval + domain-vocab augmentation. Always label a WER
+  number with the eval set's nature.

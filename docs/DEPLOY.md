@@ -104,14 +104,51 @@ curl -H "Authorization: Bearer $TOKEN" \
 (Use the MagicDNS name `transcribe-svc.<tailnet>.ts.net`, or the tailnet IP from
 `tailscale status`.)
 
+### HTTPS (required for mic recording + PWA install on iPhone)
+
+Browsers only allow the microphone in a **secure context** (HTTPS or localhost),
+so recording over plain `http://…:8000` is blocked on the phone. Enable HTTPS once
+with `tailscale serve` (issues a valid **Let's Encrypt** cert for the MagicDNS
+name — no browser warning; the tailnet must have HTTPS Certificates enabled, which
+it is if `tailscale status --json` shows a non-empty `CertDomains`):
+
+```sh
+docker compose -f docker-compose.gpu.yml exec tailscale tailscale serve --bg 8000
+# → https://transcribe-svc.<tailnet>.ts.net/  proxies to  http://127.0.0.1:8000
+```
+
+Then browse **`https://transcribe-svc.<tailnet>.ts.net`** (no port) on the phone.
+The config persists in the `tailscale_state` volume. Disable with
+`tailscale serve --https=443 off`.
+
+---
+
+## Fallback: CPU-only / the old server
+
+`main` runs on a CPU-only host unchanged, because every GPU feature is opt-in and
+defaults to CPU. On the old Proxmox VM (or any box without an NVIDIA GPU), deploy
+the **CPU compose** — not the GPU one:
+
+```sh
+docker compose up -d          # docker-compose.yml — CPU profile
+```
+
+This uses `ASR_BACKEND=whisperx` (in-process CPU WhisperX), `DIARIZE_BACKEND=local`
+(in-process CPU pyannote), role labels off, `task=transcribe`. The `diarize-svc`
+GPU sidecar is referenced **only** in `docker-compose.gpu.yml` and is never touched
+by the CPU compose, so nothing forces CUDA. Carry over the same `.env`. Slower
+(no GPU) but fully functional — the same path Phase 1/2 ran on that VM.
+
 ---
 
 ## Deploying to the Alienware (Windows 11 + WSL2 + Docker Desktop + RTX 5090)
 
-This is the Phase 3 GPU path and the current home of record (transcribe-svc
-moved here from the Proxmox VM on 2026-07-12). Uses `docker-compose.gpu.yml` —
-three containers: a tailscale sidecar, Speaches doing ASR on the GPU, and
-transcribe-svc doing diarization + orchestration on CPU.
+The current home of record (transcribe-svc moved here from the Proxmox VM on
+2026-07-12). Uses `docker-compose.gpu.yml` — **four** containers: a tailscale
+sidecar (also terminating HTTPS via `tailscale serve`), **Speaches** doing ASR on
+the GPU, a **`diarize-svc`** sidecar doing pyannote diarization on the GPU, and
+transcribe-svc orchestrating on CPU. ASR and diarization each fall back to
+in-process CPU per request if their sidecar is unavailable.
 
 ### Host prerequisites
 
