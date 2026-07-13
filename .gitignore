@@ -47,6 +47,11 @@ tests/fixtures/*.flac
 # committed). The scripts, code, and scorecards under ml/eval/reports/ ARE committed.
 ml/synth/out/
 
+# Voice enrollments are biometric voiceprints — NEVER commit them (even synthetic
+# ones are regenerable). Sweep reports under ml/enroll/reports/ ARE committed.
+ml/enroll/enrollments/
+enrollments/
+
 # Coverage
 .coverage
 htmlcov/
