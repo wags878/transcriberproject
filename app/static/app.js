@@ -134,6 +134,7 @@ async function toggleRecord() {
 
 /* ---------- transcribe ---------- */
 let currentUrls = { txt: "", json: "" };
+let currentJobId = "";
 function setErr(m) { const e = $("err"); e.hidden = !m; e.textContent = m; }
 
 async function transcribe() {
