@@ -168,3 +168,24 @@ diagnosing fallback drift.
 
 Diarization always runs in-container via pyannote; the ASR backend only affects
 speech-to-text.
+
+---
+
+## Accepted audio formats
+
+`POST /v1/transcribe` has **no format allowlist** — the upload is decoded by
+ffmpeg (used by both ASR backends and the diarizer), so anything ffmpeg can
+decode is accepted: WAV, MP3, M4A/AAC, FLAC, OGG/Vorbis, Opus, WMA, WebM/Opus,
+and audio inside video containers (MP4/MOV/MKV). The only hard limits are a
+required filename (`400` if missing) and `MAX_UPLOAD_MB` (default 500 → `413`).
+An undecodable/corrupt file currently surfaces as a generic `500`.
+
+---
+
+## Web client (PWA)
+
+An installable single-page client is served from the same origin at `/`
+(`app/static/`), with synthetic demo clips at `/samples`. It holds the bearer
+token in `localStorage` and calls the same `/v1/*` endpoints — the API stays
+auth-gated. Reach it at `http://localhost:8000` (host loopback, published by the
+GPU compose) or over the tailnet. See `docs/DEPLOY.md`.

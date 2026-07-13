@@ -91,18 +91,18 @@ GPU. They cover health, auth, and the route shapes.
 
 ## Reaching it from your iPhone / laptop
 
-Until the Phase 3 PWA exists, use `curl`:
+Either the **web client** (a browser) or `curl`:
 
 ```sh
 # From any device on the tailnet:
 TOKEN=...
 curl -H "Authorization: Bearer $TOKEN" \
      -F "audio=@~/Downloads/recording.m4a" \
-     http://100.x.y.z:8000/v1/transcribe
+     http://transcribe-svc.<your-tailnet>.ts.net:8000/v1/transcribe
 ```
 
-(Replace `100.x.y.z` with the VM's tailnet IP from `tailscale status`. A
-MagicDNS hostname can be set later — see `PROJECT_PLAN.md` §8 Q6.)
+(Use the MagicDNS name `transcribe-svc.<tailnet>.ts.net`, or the tailnet IP from
+`tailscale status`.)
 
 ---
 
@@ -193,13 +193,24 @@ That `device: cpu` refers to the **local WhisperX fallback** inside
 transcribe-svc; Speaches does the actual GPU inference and reports separately
 in the `asr_backend` field on each transcription response.
 
+### Web client
+
+`docker-compose.gpu.yml` publishes the service on the host loopback
+(`127.0.0.1:8000`), so the installable **PWA** is at <http://localhost:8000> on
+the Alienware itself. Paste the API token in ⚙ Settings; drag in an audio file,
+record, or click a committed sample (`/samples`). Over the tailnet the same app
+is at `http://transcribe-svc.<tailnet>.ts.net:8000` — note that's **http on
+:8000**, not https; mic recording + "Add to Home Screen" require a secure
+context, so for full mobile use add `tailscale serve` (HTTPS) later. `localhost`
+is already a secure context, so recording works there.
+
 ### First-transcribe smoke test
 
 ```bash
 curl -H "Authorization: Bearer $API_TOKEN" \
-     -F "audio=@tests/fixtures/short_two_speaker.wav" \
+     -F "audio=@samples/friendly_conversation.mp3" \
      -F "title=alienware-smoke" \
-     https://transcribe-svc.<your-tailnet>.ts.net/v1/transcribe
+     http://localhost:8000/v1/transcribe
 ```
 
 Expected: HTTP 200 with `transcript_txt_url` and `transcript_json_url`. Fetch
