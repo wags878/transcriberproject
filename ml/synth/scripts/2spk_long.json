@@ -1,0 +1,25 @@
+{
+  "name": "2spk_long",
+  "description": "Longer two-speaker catch-up; exercises WER + diarization stability over many turns.",
+  "silence_ms": 450,
+  "voices": {
+    "A": "en-US-AriaNeural",
+    "B": "en-US-GuyNeural"
+  },
+  "turns": [
+    {"speaker": "A", "text": "It's so good to finally catch up. How have you been?"},
+    {"speaker": "B", "text": "Pretty good, honestly. Work has been busy, but the good kind of busy. How about you?"},
+    {"speaker": "A", "text": "Same here. I actually started taking a pottery class on the weekends."},
+    {"speaker": "B", "text": "Pottery? That's great. I never would have pictured you at a wheel covered in clay."},
+    {"speaker": "A", "text": "I know. It's messier than I expected, but it's weirdly relaxing. You should come try a session sometime."},
+    {"speaker": "B", "text": "I might take you up on that. I've been looking for something to do that isn't staring at a screen."},
+    {"speaker": "A", "text": "That's exactly why I started. My eyes were begging me for a break."},
+    {"speaker": "B", "text": "Tell me about it. So, are you still planning that trip out to the coast this summer?"},
+    {"speaker": "A", "text": "Yeah, we booked it last week. Two weeks near the water, no laptop allowed."},
+    {"speaker": "B", "text": "That sounds perfect. Send me pictures, especially of the sunsets."},
+    {"speaker": "A", "text": "Absolutely. And you have to promise you'll actually take some time off too."},
+    {"speaker": "B", "text": "Deal. Let's grab coffee before you leave and plan it all out."},
+    {"speaker": "A", "text": "I'd love that. Same place as always?"},
+    {"speaker": "B", "text": "Where else? I'll see you Saturday."}
+  ]
+}

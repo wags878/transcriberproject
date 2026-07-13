@@ -1,0 +1,17 @@
+{
+  "name": "2spk_domain_vocab",
+  "description": "Two-speaker exchange dense with clinical/therapy vocabulary; probes domain-term WER (the one legitimate synthetic training use: vocabulary augmentation).",
+  "silence_ms": 400,
+  "voices": {
+    "A": "en-US-AriaNeural",
+    "B": "en-US-GuyNeural"
+  },
+  "turns": [
+    {"speaker": "A", "text": "Last session we talked about using cognitive behavioral therapy to interrupt the rumination cycle. How did the thought records go?"},
+    {"speaker": "B", "text": "The thought records helped. I noticed a lot of catastrophizing and some black and white thinking when my anxiety spiked."},
+    {"speaker": "A", "text": "That's good insight. Those are classic cognitive distortions. Did the diaphragmatic breathing help with the physiological arousal?"},
+    {"speaker": "B", "text": "It did during the panic, but my psychiatrist also adjusted my sertraline dosage, which seemed to reduce the baseline hypervigilance."},
+    {"speaker": "A", "text": "Good. We can add some dialectical behavior therapy skills, like distress tolerance and emotion regulation, alongside the exposure hierarchy."},
+    {"speaker": "B", "text": "I'm willing to try the exposure work, though the anticipatory anxiety before each step is still pretty intense."}
+  ]
+}
