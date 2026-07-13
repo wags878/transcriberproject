@@ -95,17 +95,28 @@ speechbrain, or pyannote's embedding) + cosine similarity. Synthetic-validatable
 - `tests/test_roles.py` — synthetic voices as stand-ins; assert the enrolled
   voice's turns get the enrolled label and others stay generic.
 
-- [ ] **B1** `ml/enroll/embed.py` + pick the embedding model (document choice).
-- [ ] **B2** `ml/enroll/enroll.py` — enrollment vector from reference clip(s).
-- [ ] **B3** Offline eval on synthetic voices: enroll voice A, verify A's turns
-      match and B/C don't (threshold sweep → pick operating point).
-- [ ] **B4** `app/roles.py` behind a config flag (`ENABLE_ROLE_LABELS`,
+- [x] **B1** `app/embed.py` (moved from `ml/enroll/` — it's a service-side
+      capability roles.py needs in the image) + pick the embedding model
+      (pyannote wespeaker; documented — zero new service deps).
+- [x] **B2** `ml/enroll/enroll.py` — enrollment vector from reference clip(s).
+- [x] **B3** Offline eval on synthetic voices: enroll voice A, verify A's turns
+      match and B/C don't (threshold sweep → pick operating point). Real e2e
+      acceptance in `ml/enroll/verify_e2e.py`.
+- [x] **B4** `app/roles.py` behind a config flag (`ENABLE_ROLE_LABELS`,
       default off) — relabels stitched segments; service path untouched when off.
-- [ ] **B5** Tests + STATUS entry. Wire into `render_txt`/`.json` only when the
-      flag is on (contract stability otherwise).
+- [x] **B5** Tests + STATUS entry. Relabeling happens on the pipeline result
+      before render, so `render_txt`/`.json` are label-agnostic (no render change
+      needed); when the flag is off, labels stay `SPEAKER_00/01`.
 
 **Acceptance:** with an enrolled synthetic "therapist" voice, its turns render as
 the enrolled label; feature is fully off by default.
+
+**✅ Track B complete (2026-07-12, branch `track-b-voice-enrollment` stacked on
+`ml-eval-harness`).** Enroll → `Therapist` + inferred `Client`, off by default.
+Threshold sweep (`ml/enroll/reports/2026-07-12-threshold-sweep.md`): genuine
+0.85–0.92 vs impostor 0.16–0.23, clean separation; default threshold 0.5.
+e2e acceptance PASS (`ml/enroll/verify_e2e.py`): Therapist lands on truth A
+(27.0s vs 0.0s). Full suite 53 passing. See STATUS 2026-07-12 Track B close-out.
 
 ---
 

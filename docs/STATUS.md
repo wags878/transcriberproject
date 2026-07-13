@@ -373,3 +373,50 @@ carries this caveat inline.
 labels), Infra I (GPU diarization — would also lift the ~19% attribution loss and
 the 2.85× throughput ceiling), Track C (LoRA scaffold). Order stands: A → B → I → C.
 
+---
+
+## 2026-07-12 — ML Track B close-out (therapist voice enrollment)
+
+Enroll a voice once → auto-label `Therapist` (and infer `Client` in a 2-speaker
+session) instead of anonymous `SPEAKER_00/01`. Branch `track-b-voice-enrollment`
+stacked on `ml-eval-harness`. **Feature is off by default** (`ENABLE_ROLE_LABELS=0`)
+— the `/v1` output contract is unchanged unless explicitly enabled.
+
+**Done (tasks B1–B5):**
+- `app/embed.py` — pretrained speaker-embedding backend + `Embedder` protocol +
+  cosine/centroid helpers. **Placed in `app/`, not `ml/`** (deviation from the
+  plan's `ml/enroll/embed.py`): `app/roles.py` uses it at request time, so it must
+  ship in the service image; `ml/enroll` imports it from there.
+- `ml/enroll/enroll.py` — build an enrollment voiceprint from ≥1 clip →
+  `<name>.npy` + metadata. Voiceprints are **biometric** → gitignored, kept off
+  shared storage.
+- `ml/enroll/sweep.py` + `ml/enroll/reports/2026-07-12-threshold-sweep.md` — cosine
+  separation on synthetic voices: genuine A **0.85–0.92**, impostors B/C
+  **0.16–0.23**; every threshold in **0.3–0.8** gives 2/2 genuine, 0/3 false
+  positives. Config default `ROLE_MATCH_THRESHOLD=0.5` sits mid-band.
+- `app/roles.py` — post-diarization pass (behind the flag): embed each cluster,
+  greedy one-to-one cosine match to enrollments, relabel + infer Client. Pure
+  matching/inference/relabel functions (torch-free-testable) + injectable embedder.
+  Wired into `pipeline.transcribe` flag-gated, off-thread.
+- `tests/test_roles.py` — 14 torch-free tests with a FakeEmbedder. **Full suite
+  53 passing** (39 prior + 14).
+
+**Acceptance (verified, `ml/enroll/verify_e2e.py`):** real enrollment + real
+pyannote diarization + real embedding on `2spk_long` → voice A's turns render as
+`Therapist`, the other as `Client`; Therapist-labeled time overlaps truth-A
+**27.0s vs B 0.0s** (right speaker); no anonymous labels remain. **PASS.**
+
+**Notes:**
+- **Zero new service dependencies** — the wespeaker embedding model
+  (`pyannote/wespeaker-voxceleb-resnet34-LM`) rides the existing pyannote/torch
+  stack (speechbrain is already transitively present). No `requirements.txt`
+  change; `Dockerfile.cpu` already `COPY app/`, so a rebuild ships `embed.py` +
+  `roles.py` automatically.
+- The **running** prod container predates this code; it keeps serving with the
+  flag off (no behavior change). To actually enable: rebuild the service image,
+  enroll a voice into `ENROLLMENTS_DIR`, set `ENABLE_ROLE_LABELS=1`, restart.
+- Two truth speakers only get Therapist/Client; 3+ speakers relabel the enrolled
+  voice and leave the rest anonymous (deliberate — no basis to name them).
+
+**Deferred / on deck:** Infra I (GPU diarization), Track C (LoRA scaffold).
+

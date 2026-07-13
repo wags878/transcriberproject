@@ -57,13 +57,33 @@ optimistic), mean speaker-attribution **81.1%**, speaker-count 4/4. See
 close-out. Gotcha: edge-tts is pinned to **7.2.8** (6.x now 403s on Microsoft's
 endpoint).
 
-## Next task → ML Track B: therapist voice enrollment
+## ML Track B → DONE (2026-07-12, branch `track-b-voice-enrollment`, stacked on `ml-eval-harness`)
 
-Per **`docs/superpowers/plans/2026-07-12-ml-eval-and-training.md`** Track B
-(B1–B5): enroll a voice once → auto-label `Therapist`/`Client` instead of
-anonymous `SPEAKER_00/01`, behind a default-off `ENABLE_ROLE_LABELS` flag.
-Validate it with Track A's harness (enroll synthetic voice A, verify A's turns
-match and B/C don't). Track A is the prerequisite measurement, now in place.
+Voice enrollment → auto-label `Therapist` (+ inferred `Client` in a 2-speaker
+session), **off by default** (`ENABLE_ROLE_LABELS=0`); `/v1` contract unchanged
+when off. Embedding is pyannote's wespeaker — **no new service deps** (rides the
+existing pyannote/torch stack). `app/embed.py` + `app/roles.py` (flag-gated in the
+pipeline); enrollment/sweep tooling under `ml/enroll/`. Threshold sweep shows
+clean separation (genuine 0.85–0.92 vs impostor 0.16–0.23; default 0.5); e2e
+acceptance PASSes. Full test suite **53 passing**.
+
+To actually enable it (the running prod container predates this code, flag off):
+```
+docker compose -f docker-compose.gpu.yml build transcribe-svc        # ships embed.py/roles.py
+docker compose -f docker-compose.gpu.yml run --rm -v ${PWD}/ml:/app/ml -v ${PWD}/app:/app/app \
+    transcribe-svc python -m ml.enroll.enroll --name Therapist --clip <ref.wav> --out-dir /data/enrollments
+# set ENABLE_ROLE_LABELS=1 in .env, then: docker compose -f docker-compose.gpu.yml up -d
+```
+Re-sweep the threshold on real (consented) voices before trusting it — synthetic
+voices separate more cleanly than real ones.
+
+## Next task → ML Infra I (GPU diarization) or Track C (LoRA scaffold)
+
+Per **`docs/superpowers/plans/2026-07-12-ml-eval-and-training.md`**. Infra I is the
+highest-ROI systems win: move pyannote diarization to CUDA to break the ~2.85×
+realtime ceiling (ASR is ~14×) and lift the ~19% attribution loss Track A
+measured. Track C is the LoRA fine-tuning scaffold (smoke-run on synthetic; real
+gains wait for consented data). Re-measure any change with Track A's harness.
 
 ## Open threads (on deck, not started)
 
