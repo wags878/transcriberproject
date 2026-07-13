@@ -321,3 +321,55 @@ storage/multi-user direction are captured as plans/specs.
 open threads, and host/tooling notes are in `docs/HANDOFF.md`** — the
 repo-tracked cold-pickup brief. Read that first on resume.
 
+---
+
+## 2026-07-12 — ML Track A close-out (synthetic eval harness)
+
+Built the measurement foundation under `ml/` (branch `ml-eval-harness`, separate
+PR from Phase 3). Self-contained, no PHI, offline — drives the live service only
+over its HTTP contract; the request path (`app/`) is untouched.
+
+**Done (tasks A1–A5):**
+- `ml/synth/generate.py` — parametric edge-tts + ffmpeg conversation generator
+  (generalizes the `samples/` recipe). Emits `audio.mp3` + `truth.json` with
+  exact per-turn `start`/`end` (cumulative rendered-clip durations + fixed
+  silence), so truth drives both WER and time-overlap attribution scoring.
+  4 scripts: 2-spk short/long, 3-spk, domain-vocab-heavy (clinical terms).
+- `ml/eval/score.py` — WER via jiwer (case/punct-normalized); speaker-attribution
+  accuracy as the fraction of truth speech-time correctly labeled after solving
+  the optimal predicted→truth label assignment (one-to-one, DER-style — over-
+  detection is penalized). Pure functions, unit-checked.
+- `ml/eval/run_baseline.py` — generate → POST `/v1/transcribe` → score → write
+  scorecard. Containerized (`ml/Dockerfile`, `ml/docker-compose.ml.yml`) so
+  generation+scoring need no host Python/ffmpeg; reaches the host service at
+  `host.docker.internal:8000`, token from `.env`.
+- First committed scorecard: `ml/eval/reports/2026-07-12-baseline.md`.
+
+**Baseline numbers (large-v3 on GPU via Speaches, CPU pyannote 3.1):**
+
+| Metric | Value |
+|---|---|
+| Clips scored | 4 (53 / 89 / 32 / 41 s) |
+| Mean WER (per-clip) | **0.0%** |
+| Word-weighted WER | **0.0%** |
+| Mean speaker-attribution accuracy | **81.1%** |
+| Speaker-count correct | **4/4** |
+
+**Honesty (do not strip from any future report):** WER 0.0% is *real* (verified:
+114/114 words exact on the domain-vocab clip, "cognitive behavioral therapy",
+"rumination" et al.) but it reflects **clean, uniform synthetic TTS, not real
+speech** — it is optimistic and not a target for real audio. The useful signal
+here is speaker attribution (~81%; the ~19% loss is turn-boundary slip at speaker
+changes, where a whole ASR segment is credited to one speaker). Every scorecard
+carries this caveat inline.
+
+**Surprised / notes:**
+- edge-tts 6.x now 403s on Microsoft's endpoint (missing `Sec-MS-GEC` handshake
+  token); pinned **7.2.8**.
+- Container clock is UTC — `date.today()` produced `2026-07-13`; report renamed
+  to the session date `2026-07-12` for consistency (`--report-date` overrides).
+
+**Deferred / on deck:** Track B (voice enrollment → real `Therapist`/`Client`
+labels), Infra I (GPU diarization — would also lift the ~19% attribution loss and
+the 2.85× throughput ceiling), Track C (LoRA scaffold). Order stands: A → B → I → C.
+

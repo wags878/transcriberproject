@@ -40,14 +40,30 @@ To bring it up / verify from scratch: `README.md` Quick start + `docs/DEPLOY.md`
 `DIARIZATION_MODEL=pyannote/speaker-diarization-3.1`. `.env.example` documents
 all keys. On the current Alienware host these are already set.
 
-## Next task → ML Track A: synthetic eval harness
+## ML Track A → DONE (2026-07-12, branch `ml-eval-harness`)
 
-Build `ml/` per **`docs/superpowers/plans/2026-07-12-ml-eval-and-training.md`**,
-Track A (tasks A1–A5): a synthetic conversation generator, WER + speaker-
-attribution/DER scoring, `run_baseline.py`, and a first baseline scorecard.
-Self-contained, no PHI, runs on the (mostly idle) GPU. It's the measurement
-foundation before any fine-tuning. The recipe for generating labeled multi-voice
-audio already exists (see `samples/` + `samples/README.md`).
+The synthetic eval harness is built under `ml/` and the first baseline is
+committed (`ml/eval/reports/2026-07-12-baseline.md`). Containerized — run it with
+the stack up:
+
+```
+docker compose -f docker-compose.gpu.yml up -d          # service
+docker compose -f ml/docker-compose.ml.yml run --rm ml-eval   # generate → score → scorecard
+```
+
+Baseline over 4 synthetic clips: mean WER **0.0%** (real, but synthetic-clean →
+optimistic), mean speaker-attribution **81.1%**, speaker-count 4/4. See
+`ml/README.md` for metrics + honesty caveats and the STATUS 2026-07-12 Track A
+close-out. Gotcha: edge-tts is pinned to **7.2.8** (6.x now 403s on Microsoft's
+endpoint).
+
+## Next task → ML Track B: therapist voice enrollment
+
+Per **`docs/superpowers/plans/2026-07-12-ml-eval-and-training.md`** Track B
+(B1–B5): enroll a voice once → auto-label `Therapist`/`Client` instead of
+anonymous `SPEAKER_00/01`, behind a default-off `ENABLE_ROLE_LABELS` flag.
+Validate it with Track A's harness (enroll synthetic voice A, verify A's turns
+match and B/C don't). Track A is the prerequisite measurement, now in place.
 
 ## Open threads (on deck, not started)
 

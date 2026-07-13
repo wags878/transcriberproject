@@ -54,21 +54,29 @@ speaker attribution, emits a baseline scorecard.
 - `ml/requirements-ml.txt` — jiwer, edge-tts, (later) torch/peft/transformers,
   speechbrain/pyannote — kept separate from the service's `requirements.txt`.
 
-- [ ] **A1** Write `ml/synth/generate.py` (extract + generalize the recipe
+- [x] **A1** Write `ml/synth/generate.py` (extract + generalize the recipe
       already proven in `samples/`: render turns with N voices, concat with
       silences, emit `truth.json`). Verify it produces a playable clip + truth.
-- [ ] **A2** Write `ml/eval/score.py`: WER via jiwer (normalize case/punct);
+- [x] **A2** Write `ml/eval/score.py`: WER via jiwer (normalize case/punct);
       speaker-attribution accuracy (align predicted segments to truth turns by
       time overlap, fraction of speech-time correctly labeled); report both.
-- [ ] **A3** Write `ml/eval/run_baseline.py`: drive the live API with a set of
+- [x] **A3** Write `ml/eval/run_baseline.py`: drive the live API with a set of
       generated clips, collect transcripts, score, write a scorecard table.
-- [ ] **A4** Run it against the current pipeline; commit the first baseline
+- [x] **A4** Run it against the current pipeline; commit the first baseline
       report. This is the number every later change is measured against.
-- [ ] **A5** STATUS.md close-out entry with the baseline numbers.
+- [x] **A5** STATUS.md close-out entry with the baseline numbers.
 
 **Acceptance:** `python ml/eval/run_baseline.py` produces a scorecard with WER +
 speaker-accuracy across ≥4 synthetic clips, no PHI, runs offline against the
 running stack.
+
+**✅ Track A complete (2026-07-12, branch `ml-eval-harness`).** Delivered under
+`ml/` (containerized: `ml/docker-compose.ml.yml`). First baseline —
+`ml/eval/reports/2026-07-12-baseline.md` — over 4 clips: mean WER **0.0%**
+(genuine but synthetic-clean, so optimistic), mean speaker-attribution **81.1%**,
+speaker-count 4/4. See the STATUS 2026-07-12 Track A close-out. Note: edge-tts
+pinned to 7.2.8 (6.x now 403s). Attribution is the meaningful metric until real
+audio exists; it should rise once diarization moves to GPU (Infra I).
 
 ---
 
