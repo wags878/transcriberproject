@@ -126,6 +126,35 @@ Auth: required.
 
 ---
 
+## `POST /v1/results/{id}/relabel`
+
+Auth: required. Content-Type: `application/json`.
+
+Manually overwrite speaker labels for a completed transcript — the
+always-available override for imperfect auto-labeling (anonymous
+`SPEAKER_00/01`, or the enrolled `Therapist`/`Client` from role labeling). The
+client sends **one final speaker label per segment, in order**:
+
+```json
+{ "speakers": ["Therapist", "Therapist", "Client", "Therapist"] }
+```
+
+The server applies the labels, recomputes `speakers_detected`, and re-renders +
+persists both the stored `.txt` and `.json`, so downloads and history reflect the
+edit. A blank/whitespace label becomes `SPEAKER_??`.
+
+**Response 200:** the full updated transcript JSON (same shape as
+`GET .../transcript.json`).
+
+**Errors:**
+| Status | Meaning |
+|---|---|
+| 400 | `speakers` length ≠ number of segments |
+| 401 | Missing / invalid bearer token |
+| 404 | Unknown id |
+
+---
+
 ## `GET /v1/admin/storage`
 
 Auth: required.
@@ -189,3 +218,11 @@ An installable single-page client is served from the same origin at `/`
 token in `localStorage` and calls the same `/v1/*` endpoints — the API stays
 auth-gated. Reach it at `http://localhost:8000` (host loopback, published by the
 GPU compose) or over the tailnet. See `docs/DEPLOY.md`.
+
+Client features: a **language selector** (defaults to English so an unfiltered
+intro can't silently mis-detect the language — set it to *Auto-detect* for
+non-English audio), and **✎ Edit speakers** on a result — rename a speaker across
+the whole transcript or reassign an individual turn, saved via
+`POST /v1/results/{id}/relabel`. The service worker is network-first **and**
+fetches shell assets with `cache: "no-store"`, so a redeploy is picked up on the
+next load without a manual hard-refresh.
