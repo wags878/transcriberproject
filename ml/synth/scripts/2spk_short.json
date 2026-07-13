@@ -1,0 +1,17 @@
+{
+  "name": "2spk_short",
+  "description": "Short two-speaker Q&A; sanity-checks WER + 2-way diarization.",
+  "silence_ms": 400,
+  "voices": {
+    "A": "en-US-AriaNeural",
+    "B": "en-US-GuyNeural"
+  },
+  "turns": [
+    {"speaker": "A", "text": "Thanks for making time today. How has your week been?"},
+    {"speaker": "B", "text": "Busy, but mostly good. I finally finished the project I was dreading."},
+    {"speaker": "A", "text": "That's a relief. Did anything about it surprise you?"},
+    {"speaker": "B", "text": "Honestly, how much easier it got once I stopped putting it off."},
+    {"speaker": "A", "text": "That's a really useful thing to notice. Let's come back to that."},
+    {"speaker": "B", "text": "Sure. I think the anticipation was worse than the work itself."}
+  ]
+}

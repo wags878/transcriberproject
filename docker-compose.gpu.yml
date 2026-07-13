@@ -1,15 +1,78 @@
-# GPU overlay. NOT used by default. Per operator decision 2026-04-30, the
-# GPU path is dormant — see docs/BLOCKERS.md B-001 and PROJECT_PLAN.md §8 Q2.
-# To opt in (after confirming `nvidia-smi` works inside a container):
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# GPU deployment for Alienware (Windows 11 + WSL2 + Docker Desktop + RTX 5090).
+#
+# Three-container stack. All three share the tailscale sidecar's network
+# namespace, so:
+#   - transcribe-svc is reachable at https://transcribe-svc.<tailnet>.ts.net
+#   - speaches binds 127.0.0.1:8001 (transcribe-svc only; not tailnet-visible)
+#   - No host port bindings anywhere.
+#
+# Bring up: docker compose -f docker-compose.gpu.yml up -d
+#
+# Prereqs (docs/DEPLOY.md, Windows section):
+#   - NVIDIA driver v566+ on the Windows host (Blackwell / WSL2 support)
+#   - Windows power settings: never sleep, lid close = do nothing
+#   - Docker Desktop with WSL2 backend + Ubuntu-22.04 integration
+#   - GPU verify: `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi`
+#   - Tailscale reusable auth key with tag:transcribe-svc → TS_AUTHKEY in .env
+
+name: transcribe-svc
+
 services:
-  transcribe-svc:
-    build:
-      dockerfile: docker/Dockerfile.gpu
-    image: transcribe-svc:gpu
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: transcribe-svc-tailscale
+    hostname: transcribe-svc
+    # Port publishing must live on the netns owner (this container), since
+    # transcribe-svc/speaches share its namespace. Expose ONLY transcribe-svc's
+    # 8000 on host loopback for local testing/PWA; the tailnet path is
+    # unchanged and Speaches' 8001 stays internal (never published).
+    ports:
+      - "127.0.0.1:8000:8000"
     environment:
-      WHISPERX_DEVICE: cuda
-      WHISPERX_COMPUTE_TYPE: int8
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_EXTRA_ARGS: --advertise-tags=tag:transcribe-svc --accept-dns=true
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: transcribe-svc-speaches
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    network_mode: service:tailscale
+    environment:
+      # Speaches binds to 8001 inside the shared netns; only transcribe-svc
+      # reaches it via localhost. Do NOT expose on 0.0.0.0.
+      UVICORN_HOST: 127.0.0.1
+      UVICORN_PORT: "8001"
+      # Download the ASR model at startup so a fresh deploy needs no manual
+      # pull. Without this, Speaches 404s a transcription for an un-downloaded
+      # model and the router silently falls back to CPU (learned at deploy).
+      # PRELOAD_MODELS is a JSON array of model IDs.
+      PRELOAD_MODELS: '["${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}"]'
+      WHISPER__COMPUTE_TYPE: int8_float16
+      # PHI posture: silence upstream telemetry/analytics. No audio is ever
+      # sent by these, but a private therapy-transcription host should not be
+      # making outbound version-check calls either.
+      DO_NOT_TRACK: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      GRADIO_ANALYTICS_ENABLED: "False"
+    volumes:
+      - speaches_models:/home/ubuntu/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -17,3 +80,101 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/v1/models"]
+      interval: 30s
+      timeout: 5s
+      # First boot downloads ~3 GB (large-v3) via PRELOAD_MODELS; keep the
+      # container out of "unhealthy" while that runs.
+      start_period: 900s
+      retries: 3
+
+  diarize-svc:
+    container_name: transcribe-svc-diarize
+    build:
+      context: ./diarize-svc
+      dockerfile: Dockerfile
+    image: transcribe-svc-diarize:cuda
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    # Shares the tailscale netns like speaches; binds 127.0.0.1:8002, reachable
+    # only by transcribe-svc (never tailnet-published).
+    network_mode: service:tailscale
+    env_file:
+      - .env
+    environment:
+      # pyannote diarization model + HF token (gated model needs conditions
+      # accepted). Same values the local path uses.
+      DIARIZATION_MODEL: ${DIARIZATION_MODEL:-pyannote/speaker-diarization-3.1}
+      HF_HOME: /data/hf
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    volumes:
+      - diarize_models:/data/hf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8002/health"]
+      interval: 30s
+      timeout: 5s
+      # First boot downloads the pyannote pipeline weights; keep it out of
+      # "unhealthy" while that runs.
+      start_period: 300s
+      retries: 3
+
+  transcribe-svc:
+    container_name: transcribe-svc
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cpu
+    image: transcribe-svc:cpu
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      # Only service_started, not service_healthy: transcribe-svc has a local
+      # WhisperX CPU fallback, so it must not be blocked by Speaches' first-run
+      # model download. The ASR router health-checks Speaches per request and
+      # falls back to CPU until the GPU backend is ready, then uses the GPU.
+      speaches:
+        condition: service_started
+      # Likewise service_started: diarization has a local CPU fallback, so the
+      # sidecar's first-run model download must not block startup. The
+      # RemoteDiarizer health-checks per request and falls back to CPU.
+      diarize-svc:
+        condition: service_started
+    network_mode: service:tailscale
+    env_file:
+      - .env
+    environment:
+      ASR_BACKEND: router
+      ASR_HOSTS: "http://127.0.0.1:8001,local-whisperx"
+      # Offload diarization to the GPU sidecar; falls back to in-process CPU
+      # pyannote if the sidecar is unreachable.
+      DIARIZE_BACKEND: remote
+      DIARIZE_URL: "http://127.0.0.1:8002"
+    volumes:
+      - models:/data/models
+      - uploads:/data/uploads
+      - outputs:/data/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+volumes:
+  tailscale_state:
+  speaches_models:
+  diarize_models:
+  models:
+  uploads:
+  outputs:

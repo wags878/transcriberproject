@@ -40,3 +40,9 @@ numpy>=1.24,<2
 
 # Used directly for filesystem retention task
 python-dateutil==2.9.0
+
+# --- Phase 3 additions ---
+# OpenAI-compat ASR client (Speaches, whisper.cpp server). Async-friendly HTTP.
+httpx==0.27.2
+# Async test support for the new ASR client/router unit tests.
+pytest-asyncio==0.24.0

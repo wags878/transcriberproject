@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1020" />
+<title>Transcribe</title>
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icon.svg" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="/icon.svg" alt="" width="28" height="28" />
+    <span>Transcribe</span>
+  </div>
+  <div class="topbar-right">
+    <span class="status" id="status-chip" title="service status">
+      <span class="dot" id="status-dot"></span><span id="status-text">checking…</span>
+    </span>
+    <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- Composer -->
+  <section class="card composer">
+    <h2 class="card-title">New transcription</h2>
+
+    <div class="dropzone" id="dropzone" tabindex="0">
+      <input type="file" id="file" accept="audio/*" hidden />
+      <div class="dz-inner" id="dz-inner">
+        <div class="dz-icon">🎙️</div>
+        <p class="dz-main">Drop an audio file, or <button class="linklike" id="pick">browse</button></p>
+        <p class="dz-sub">or record straight from your mic</p>
+      </div>
+      <div class="selected" id="selected" hidden>
+        <div class="sel-row">
+          <span class="sel-name" id="sel-name"></span>
+          <button class="chip-x" id="clear-file" title="Remove">✕</button>
+        </div>
+        <audio id="preview-audio" controls preload="metadata"></audio>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn ghost rec" id="record"><span class="rec-dot"></span> Record</button>
+      <span class="rec-timer" id="rec-timer" hidden>00:00</span>
+    </div>
+
+    <div class="samples">
+      <span class="samples-label">Try a sample:</span>
+      <div class="sample-chips" id="sample-chips"></div>
+    </div>
+
+    <div class="options">
+      <label>Title <input type="text" id="title" placeholder="optional" /></label>
+      <label>Speakers <input type="number" id="spk" min="1" max="10" placeholder="auto" /></label>
+      <label>Audio language
+        <select id="lang">
+          <option value="en" selected>English</option>
+          <option value="">Auto-detect</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </label>
+      <label>Output
+        <select id="task">
+          <option value="transcribe" selected>Same as audio</option>
+          <option value="translate">English (translate)</option>
+        </select>
+      </label>
+    </div>
+
+    <button class="btn primary big" id="go" disabled>Transcribe</button>
+    <div class="progress" id="progress" hidden>
+      <div class="bar"><div class="bar-fill"></div></div>
+      <span id="progress-text"></span>
+    </div>
+    <p class="err" id="err" hidden></p>
+  </section>
+
+  <!-- Result -->
+  <section class="card result" id="result" hidden>
+    <div class="result-head">
+      <h2 class="card-title" id="result-title">Transcript</h2>
+      <div class="result-actions">
+        <button class="btn tiny" id="edit-btn">✎ Edit speakers</button>
+        <button class="btn tiny" id="copy-btn">Copy</button>
+        <button class="btn tiny" id="dl-txt">.txt</button>
+        <button class="btn tiny" id="dl-json">.json</button>
+      </div>
+    </div>
+    <div class="meta" id="meta"></div>
+    <audio id="result-audio" class="result-audio" controls preload="metadata" hidden></audio>
+    <div class="transcript" id="transcript"></div>
+  </section>
+
+  <!-- Library -->
+  <section class="card library" id="library" hidden>
+    <div class="result-head">
+      <h2 class="card-title">Library</h2>
+      <button class="btn tiny ghost" id="clear-history">Clear</button>
+    </div>
+    <ul class="history" id="history"></ul>
+  </section>
+</main>
+
+<!-- Settings drawer -->
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Settings">
+  <div class="drawer-head"><h3>Settings</h3><button class="icon-btn" id="drawer-close">✕</button></div>
+  <label class="drawer-field">API token
+    <input type="password" id="token" placeholder="paste your API_TOKEN" autocomplete="off" />
+  </label>
+  <p class="hint">Stored only in this browser (localStorage). Sent as <code>Authorization: Bearer …</code> to this host.</p>
+  <div class="drawer-field">
+    <span>Host</span><code id="host-label"></code>
+  </div>
+</aside>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -227,27 +227,283 @@ the Docker image is ever distributed, know which ffmpeg build is baked in first.
 
 ---
 
-## 2026-07-12 — Phase 3 work started on branch `phase-3-gpu` (main unchanged)
+## 2026-07-12 — Phase 3 implemented + deployed on the Alienware (GPU via Speaches)
 
-Operator elected to start GPU acceleration work on an isolated branch so `main` continues
-to ship the Phase 2 CPU state that TesterClaw's T4.0 target depends on. Nothing on `main`
-changes here — this entry is a pointer so `main` isn't blind to the branch.
+New home of record: the Alienware Area-51 laptop (Windows 11 + WSL2 + Docker
+Desktop, RTX 5090 Laptop 24 GB, driver 592.02). transcribe-svc migrated off the
+Proxmox VM. GPU passthrough verified (`docker run --gpus all
+nvidia/cuda:12.8.0-base nvidia-smi` sees the 5090).
 
-**On `phase-3-gpu`:**
-- Design doc: `docs/superpowers/specs/2026-07-12-phase-3-gpu-speaches-design.md`
-- Approach: **Path 1 — Speaches sidecar**. ASR moves to a `ghcr.io/speaches-ai/speaches:latest-cuda`
-  container that ships its own CUDA 12.8 + PyTorch 2.7+ stack, so the 5090 (Blackwell sm_120)
-  can be used without rebuilding `transcribe-svc`'s existing `whisperx==3.2.0` / `torch==2.0.1`
-  pin chain. pyannote diarization stays CPU-side inside `transcribe-svc`. Tailscale runs as a
-  sidecar container; `transcribe-svc` and `speaches` share its network namespace, so only
-  `transcribe-svc:8000` is reachable over the tailnet (`speaches` binds `127.0.0.1:8001`).
-- Deployment target: **Alienware Area-51** (Windows 11 + WSL2 + Docker Desktop + RTX 5090 24 GB).
-- Fallback tier: **MacBook M5** running `whisper.cpp` server (LM Studio does not yet expose
-  `/v1/audio/transcriptions`; Ollama can't run Whisper). Final fallback = in-container WhisperX
-  on CPU (Phase 1/2 code path preserved).
-- Explicit escape hatch: if Phase 3 is abandoned, deleting the branch loses only speculative
-  work. `main` continues to serve the T4.0 target and any real recording workloads.
+**Shipped (Tasks 0–10 of the Phase 3 plan):**
+- Composable pipeline: `app/asr.py` (`ASRBackend` protocol, `LocalWhisperXASR`,
+  `SpeachesASR`, `ASRRouter`), `app/diarize.py` (`Diarizer`), `app/stitch.py`
+  (`stitch_speakers`). `TranscribePipeline` now runs ASR + diarization
+  concurrently (`asyncio.gather`) and stitches. Public HTTP surface unchanged.
+- ASR routing: `ASR_BACKEND=router`, `ASR_HOSTS=http://127.0.0.1:8001,local-whisperx`.
+  Health-checked first-healthy-wins with fall-through to CPU on error.
+- Three-container GPU stack (`docker-compose.gpu.yml`): tailscale sidecar +
+  Speaches (CUDA) + transcribe-svc sharing the tailscale netns. No host ports.
+- Unit tests: 39 passing (stitch 7, speaches 4, router 5, + existing). Run
+  locally in a no-torch WSL venv (get-pip bootstrap — ensurepip is stripped and
+  there's no passwordless sudo; documented in DEPLOY.md).
 
-**Not started yet:** any code changes. Design is under operator review before an
-implementation plan is drafted.
+**Acceptance — all met (synthetic gTTS clip only; PHI rule: never real audio):**
+- All three containers healthy; tailscale node `transcribe-svc.example-tailnet.ts.net`
+  tagged `tag:transcribe-svc`, online.
+- `/v1/health` returns the documented JSON.
+- GPU path: `.json` shows `asr_backend=speaches@http://127.0.0.1:8001`,
+  `model=Systran/faster-whisper-large-v3`. Transcript accurate + speaker-labeled.
+- Fallback: stop Speaches → `asr_backend=local-whisperx`, `model=medium`, still 200.
+  Restart Speaches → GPU path resumes.
+- VRAM: ~3.6 GB with large-v3 resident (well under 24 GB).
+
+**Detours hit (all resolved):**
+- **B-005 (resolved): Speaches does not auto-download the ASR model.** First
+  transcription 404'd ("model is not installed locally") and the router silently
+  fell back to CPU. Root-caused via the new `served_by`/`model` reporting (added
+  precisely because the pre-fix `asr_backend` printed the whole router chain and
+  hid which tier served). Fixed with `PRELOAD_MODELS='["...large-v3"]'` in compose
+  (persists in the `speaches_models` volume) + relaxed transcribe-svc's
+  dependency to `service_started` (it has the CPU fallback) + bumped the speaches
+  healthcheck `start_period` to 900s for the ~3 GB first-run pull.
+- Windows line endings: `core.autocrlf=true` had rewritten `docker/entrypoint.sh`
+  to CRLF in the working tree — a latent build-breaker (CRLF shebang). Added
+  `.gitattributes` forcing LF + set repo-local `autocrlf=false`.
+- Tooling gotchas for the next agent: the Windows `docker.exe` needs Windows
+  paths for `docker cp` (git-bash `/c/...` paths silently produce an unreadable
+  file → curl exit 26); `git-bash` has no `docker` on PATH (use the full
+  `/c/Program Files/Docker/...` path or PowerShell); PowerShell 5.1 flips `$?` to
+  false on any native-command stderr, so BuildKit progress reads as a false
+  "build failed".
+
+**Performance reality (first request, cold):** 12.2 s synthetic clip took 34–47 s
+wall on a cold stack — dominated by first-time model loads (Speaches loading
+large-v3 into VRAM, pyannote + wav2vec2 alignment) and **CPU-side diarization**.
+GPU accelerates ASR only; pyannote diarization stays on CPU by design, so it is
+the bottleneck for long sessions. Warm steady-state is materially faster. A real
+5-minute-fixture baseline and warm-run numbers are still to be measured on
+operator-supplied (synthetic) audio.
+
+**Deferred:**
+- Pyannote diarization on GPU (would cut the dominant cost for 60-min sessions).
+- Startup warm-up / `EAGER_LOAD` so the first real request isn't a cold load.
+- PWA client for the demo; native iOS/Android with embedded `tsnet` as
+  `tag:transcribe-client` is post-demo (needs Apple/Play developer enrollment).
+
+### Throughput baseline (2026-07-12, warm, 145.9 s synthetic speech)
+
+| Path | Wall | Realtime factor |
+|---|---|---|
+| Pure GPU ASR (Speaches large-v3, diarization bypassed) | ~10.5 s | ~14× |
+| Full GPU pipeline (ASR ∥ CPU diarization + align + stitch) | ~51 s | ~2.85× |
+| CPU-only fallback (medium ASR + CPU diarization) | ~91 s | ~1.6× |
+
+GPU ASR is ~14× realtime; the full pipeline is **bounded by CPU-side pyannote
+diarization** (~2.85×). ASR finishes in ~10 s then waits ~40 s for diarization.
+60-min session extrapolation: GPU path ~21 min wall; CPU-only ~37 min; moving
+diarization to GPU would approach the ASR-bound ~4–5 min (~5× win — the single
+highest-value optimization). Cold first request is dominated by model load
+(a 12 s clip took 34–47 s cold vs. these warm numbers) — warm up before a demo.
+Measured via `docker exec` curl inside the netns; `MAX_CONCURRENT_JOBS=1`, so
+concurrent uploads serialize.
+
+---
+
+## 2026-07-12 — Session handoff (repo-tracked)
+
+After Phase 3 deploy: added a demo-quality PWA web client (`app/static`, served
+at `/`, published on `localhost:8000`), synthetic sample clips (`samples/`, served
+at `/samples`), a network-first service worker, and refreshed README/API/DEPLOY.
+Confirmed accepted audio = anything ffmpeg decodes; the ML track and
+storage/multi-user direction are captured as plans/specs.
+
+**Current state, how to resume, the agreed next task (ML Track A eval harness),
+open threads, and host/tooling notes are in `docs/HANDOFF.md`** — the
+repo-tracked cold-pickup brief. Read that first on resume.
+
+---
+
+## 2026-07-12 — ML Track A close-out (synthetic eval harness)
+
+Built the measurement foundation under `ml/` (branch `ml-eval-harness`, separate
+PR from Phase 3). Self-contained, no PHI, offline — drives the live service only
+over its HTTP contract; the request path (`app/`) is untouched.
+
+**Done (tasks A1–A5):**
+- `ml/synth/generate.py` — parametric edge-tts + ffmpeg conversation generator
+  (generalizes the `samples/` recipe). Emits `audio.mp3` + `truth.json` with
+  exact per-turn `start`/`end` (cumulative rendered-clip durations + fixed
+  silence), so truth drives both WER and time-overlap attribution scoring.
+  4 scripts: 2-spk short/long, 3-spk, domain-vocab-heavy (clinical terms).
+- `ml/eval/score.py` — WER via jiwer (case/punct-normalized); speaker-attribution
+  accuracy as the fraction of truth speech-time correctly labeled after solving
+  the optimal predicted→truth label assignment (one-to-one, DER-style — over-
+  detection is penalized). Pure functions, unit-checked.
+- `ml/eval/run_baseline.py` — generate → POST `/v1/transcribe` → score → write
+  scorecard. Containerized (`ml/Dockerfile`, `ml/docker-compose.ml.yml`) so
+  generation+scoring need no host Python/ffmpeg; reaches the host service at
+  `host.docker.internal:8000`, token from `.env`.
+- First committed scorecard: `ml/eval/reports/2026-07-12-baseline.md`.
+
+**Baseline numbers (large-v3 on GPU via Speaches, CPU pyannote 3.1):**
+
+| Metric | Value |
+|---|---|
+| Clips scored | 4 (53 / 89 / 32 / 41 s) |
+| Mean WER (per-clip) | **0.0%** |
+| Word-weighted WER | **0.0%** |
+| Mean speaker-attribution accuracy | **81.1%** |
+| Speaker-count correct | **4/4** |
+
+**Honesty (do not strip from any future report):** WER 0.0% is *real* (verified:
+114/114 words exact on the domain-vocab clip, "cognitive behavioral therapy",
+"rumination" et al.) but it reflects **clean, uniform synthetic TTS, not real
+speech** — it is optimistic and not a target for real audio. The useful signal
+here is speaker attribution (~81%; the ~19% loss is turn-boundary slip at speaker
+changes, where a whole ASR segment is credited to one speaker). Every scorecard
+carries this caveat inline.
+
+**Surprised / notes:**
+- edge-tts 6.x now 403s on Microsoft's endpoint (missing `Sec-MS-GEC` handshake
+  token); pinned **7.2.8**.
+- Container clock is UTC — `date.today()` produced `2026-07-13`; report renamed
+  to the session date `2026-07-12` for consistency (`--report-date` overrides).
+
+**Deferred / on deck:** Track B (voice enrollment → real `Therapist`/`Client`
+labels), Infra I (GPU diarization — would also lift the ~19% attribution loss and
+the 2.85× throughput ceiling), Track C (LoRA scaffold). Order stands: A → B → I → C.
+
+---
+
+## 2026-07-12 — ML Track B close-out (therapist voice enrollment)
+
+Enroll a voice once → auto-label `Therapist` (and infer `Client` in a 2-speaker
+session) instead of anonymous `SPEAKER_00/01`. Branch `track-b-voice-enrollment`
+stacked on `ml-eval-harness`. **Feature is off by default** (`ENABLE_ROLE_LABELS=0`)
+— the `/v1` output contract is unchanged unless explicitly enabled.
+
+**Done (tasks B1–B5):**
+- `app/embed.py` — pretrained speaker-embedding backend + `Embedder` protocol +
+  cosine/centroid helpers. **Placed in `app/`, not `ml/`** (deviation from the
+  plan's `ml/enroll/embed.py`): `app/roles.py` uses it at request time, so it must
+  ship in the service image; `ml/enroll` imports it from there.
+- `ml/enroll/enroll.py` — build an enrollment voiceprint from ≥1 clip →
+  `<name>.npy` + metadata. Voiceprints are **biometric** → gitignored, kept off
+  shared storage.
+- `ml/enroll/sweep.py` + `ml/enroll/reports/2026-07-12-threshold-sweep.md` — cosine
+  separation on synthetic voices: genuine A **0.85–0.92**, impostors B/C
+  **0.16–0.23**; every threshold in **0.3–0.8** gives 2/2 genuine, 0/3 false
+  positives. Config default `ROLE_MATCH_THRESHOLD=0.5` sits mid-band.
+- `app/roles.py` — post-diarization pass (behind the flag): embed each cluster,
+  greedy one-to-one cosine match to enrollments, relabel + infer Client. Pure
+  matching/inference/relabel functions (torch-free-testable) + injectable embedder.
+  Wired into `pipeline.transcribe` flag-gated, off-thread.
+- `tests/test_roles.py` — 14 torch-free tests with a FakeEmbedder. **Full suite
+  53 passing** (39 prior + 14).
+
+**Acceptance (verified, `ml/enroll/verify_e2e.py`):** real enrollment + real
+pyannote diarization + real embedding on `2spk_long` → voice A's turns render as
+`Therapist`, the other as `Client`; Therapist-labeled time overlaps truth-A
+**27.0s vs B 0.0s** (right speaker); no anonymous labels remain. **PASS.**
+
+**Notes:**
+- **Zero new service dependencies** — the wespeaker embedding model
+  (`pyannote/wespeaker-voxceleb-resnet34-LM`) rides the existing pyannote/torch
+  stack (speechbrain is already transitively present). No `requirements.txt`
+  change; `Dockerfile.cpu` already `COPY app/`, so a rebuild ships `embed.py` +
+  `roles.py` automatically.
+- The **running** prod container predates this code; it keeps serving with the
+  flag off (no behavior change). To actually enable: rebuild the service image,
+  enroll a voice into `ENROLLMENTS_DIR`, set `ENABLE_ROLE_LABELS=1`, restart.
+- Two truth speakers only get Therapist/Client; 3+ speakers relabel the enrolled
+  voice and leave the rest anonymous (deliberate — no basis to name them).
+
+**Deferred / on deck:** Infra I (GPU diarization), Track C (LoRA scaffold).
+
+---
+
+## 2026-07-12 — Operator-driven UX batch (language, speaker editing, output language)
+
+Shipped and **deployed to the live GPU stack** off operator feedback while testing
+real (public, non-PHI) therapy clips. Branches `pwa-manual-controls` then
+`output-language`.
+
+**Trigger:** a real clip came back as "Welsh gibberish" — Whisper auto-detected
+`cy` from an unfiltered video intro and rendered the whole English session in
+Welsh. Re-running with English forced fixed it. Motivated language control +
+the standing manual-override principle.
+
+**Done:**
+- **Language control** — PWA *Audio language* selector (defaults to English so
+  auto-detect can't silently mis-pick); API already accepted `language`.
+- **Manual speaker editor** — `POST /v1/results/{id}/relabel` (one final speaker
+  label per segment; re-renders + persists .txt/.json). PWA "✎ Edit speakers":
+  rename a speaker everywhere, reassign an individual turn. The always-available
+  override for imperfect auto-labeling. Verified live (relabeled a real transcript
+  to 141 Therapist / 107 Lucy turns).
+- **Output language (phase 1)** — `task=transcribe|translate` through
+  API→pipeline→ASR. Whisper only outputs source-language or English, so the PWA
+  *Output* selector offers exactly that, force-locked. Speaches routes translate
+  to `/v1/audio/translations`. Verified live: synthetic Spanish clip →
+  transcribe=Spanish, translate=English. Arbitrary target languages are **phase
+  2** (needs a local translation model — NLLB/M2M-100).
+- **SW deploy fix** — service worker fetches shell assets with `cache:"no-store"`
+  (v4), so redeploys aren't masked by a stale HTTP-cached `app.js`.
+
+Test suite **68 passing** (+15 over Track B: relabel, task routing/validation).
+A browser smoke test caught a real `currentJobId` ReferenceError that would have
+broken every render.
+
+**Design principle recorded:** automation is assisted, not absolute — every
+auto-labeling/detection feature keeps a manual override (see the manual-fallback
+memory).
+
+**Deferred / on deck:** Track B live-enable (needs an operator therapist clip),
+Infra I (GPU diarization), output-language phase 2 (translation model), Track C.
+
+---
+
+## 2026-07-13 — Infra I: GPU diarization sidecar (deployed)
+
+Moved the pipeline's dominant cost — pyannote diarization — off CPU and onto the
+RTX 5090. Branch `infra-gpu-diarization`.
+
+**Why a sidecar, not in-process:** the 5090 is Blackwell (sm_120) and needs
+torch ≥2.7 / cu128, but transcribe-svc pins torch 2.0.1+cu117 (sm_90 max) because
+pyannote.audio 3.1.1 forces it (B-003). Upgrading in place detonates the chain.
+So it's split out like Speaches ASR: a `diarize-svc` container with a modern CUDA
+stack (torch 2.8+cu128, pyannote.audio 3.3.2) exposing `POST /diarize` on the
+shared tailscale netns (127.0.0.1:8002). transcribe-svc's pins are untouched.
+Notably `lightning` is **no longer quarantined** on PyPI, so modern pyannote
+installs cleanly now.
+
+**Before/after (realtime factor = audio_seconds / wall_seconds, warm):**
+
+| Path | Clip | Wall | Realtime factor |
+|---|---|---|---|
+| Before — CPU diarization (STATUS 2026-07-12) | 145.9 s | ~51 s | ~2.85× |
+| After — GPU diarization sidecar | 88.8 s | 8.1 s | **~10.9×** |
+| After — GPU diarization sidecar | 834 s | 96.2 s | **~8.7×** |
+
+`diarize_device: cuda` confirmed in the transcript header; the sidecar logs
+`POST /diarize 200`. The realtime factor now clears the plan's ≥8× target (the
+longer the clip, the more diarization dominates, so 8.7× on 14 min vs 10.9× on
+90 s).
+
+**CPU fallback (operator requirement) — verified live:** with the sidecar
+stopped, a transcription still succeeded with `diarize_device: cpu-fallback` and
+correct speaker count. RemoteDiarizer health-checks per request and falls back to
+in-process CPU pyannote on any sidecar failure; 4 unit tests cover it.
+
+**Build gotchas (diarize-svc image) for next time:**
+- pyannote 3.3.2 calls `hf_hub_download(use_auth_token=...)`, removed in new
+  huggingface_hub → pin `huggingface_hub==0.25.2`.
+- pyannote imports `matplotlib` at pipeline-load but doesn't pull it → add it.
+- torch 2.6+ defaults `torch.load(weights_only=True)`, which rejects pyannote
+  checkpoints (lightning passes `weights_only=True` *explicitly*) → the sidecar
+  force-patches `torch.load` to `weights_only=False` (trusted HF checkpoint).
+
+**Deferred / on deck:** Track B live-enable (operator clip), output-language
+phase 2 (translation model), Track C. Both GPU services (Speaches + diarize)
+share the one 5090; VRAM headroom is fine for large-v3 + pyannote.
 

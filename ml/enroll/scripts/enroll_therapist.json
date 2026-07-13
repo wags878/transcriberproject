@@ -1,0 +1,15 @@
+{
+  "name": "enroll_therapist",
+  "description": "Single-speaker reference clip for enrolling voice A as 'Therapist'. Distinct sentences from the eval scripts so probes measure genuine voice similarity, not memorized audio.",
+  "silence_ms": 300,
+  "voices": {
+    "A": "en-US-AriaNeural"
+  },
+  "turns": [
+    {"speaker": "A", "text": "Before we begin, I want to remind you that this is a space where you can speak freely and without judgment."},
+    {"speaker": "A", "text": "Take whatever time you need. There's no rush, and we can slow down whenever something feels difficult."},
+    {"speaker": "A", "text": "I'm going to reflect back some of what I hear, and you can tell me if I've understood you correctly."},
+    {"speaker": "A", "text": "It sounds like this has been weighing on you for a while, and it took real courage to bring it up today."},
+    {"speaker": "A", "text": "Let's think together about one small, manageable step you could try before we meet again next week."}
+  ]
+}

@@ -3,78 +3,51 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.asr import ASRBackend, ASRResult, LocalWhisperXASR
 from app.config import settings
+from app.diarize import Diarizer, RemoteDiarizer, build_diarizer
+from app.stitch import stitch_speakers
 
 log = logging.getLogger("transcribe-svc.pipeline")
 
 
 class TranscribePipeline:
-    """Wrapper around WhisperX. Loads models once and serves transcription requests
-    serialized through an asyncio.Semaphore.
+    """Orchestrates: ASR (any ASRBackend) + diarization (Diarizer) run
+    concurrently on the same audio; then stitch_speakers() joins them.
 
-    Heavy imports (whisperx / torch) are deferred to load() so that test code can
-    instantiate this class without pulling them in.
+    Concurrency across requests is gated by a semaphore sized to
+    settings.max_concurrent_jobs.
     """
 
-    def __init__(self) -> None:
-        self._model: Any | None = None
-        self._diarizer: Any | None = None
-        self._align_models: dict[str, tuple[Any, Any]] = {}
-        self._whisperx: Any | None = None
-        self._loaded: bool = False
+    def __init__(
+        self,
+        asr: ASRBackend | None = None,
+        diarizer: "Diarizer | RemoteDiarizer | None" = None,
+    ) -> None:
+        self._asr: ASRBackend = asr or LocalWhisperXASR()
+        self._diarizer: Diarizer | RemoteDiarizer = diarizer or build_diarizer()
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+        self._loaded = False
         self._load_lock = asyncio.Lock()
 
     def is_loaded(self) -> bool:
         return self._loaded
 
     async def load(self) -> None:
-        """Load whisper + diarization models once. Idempotent on success;
-        retries on the next call if a previous attempt failed partway through.
-        """
         async with self._load_lock:
             if self._loaded:
                 return
-            log.info(
-                "Loading whisperx (model=%s, device=%s, compute_type=%s)",
-                settings.whisper_model,
-                settings.whisperx_device,
-                settings.whisperx_compute_type,
-            )
-            await asyncio.to_thread(self._load_blocking)
+            # Load in parallel — ASR load may be a no-op for HTTP-backed
+            # backends, and diarization can pull from HF concurrently.
+            await asyncio.gather(self._asr.load(), self._diarizer.load())
             self._loaded = True
-            log.info("Models loaded.")
-
-    def _load_blocking(self) -> None:
-        # Build all components into locals first; only commit them onto self
-        # once both the model and the diarizer have constructed successfully.
-        # Otherwise a partial failure leaves the pipeline half-initialized
-        # and the next load() call would short-circuit on a stale _model.
-        os.environ.setdefault("HF_HOME", str(settings.hf_home))
-        import whisperx  # type: ignore
-
-        model = whisperx.load_model(
-            settings.whisper_model,
-            device=settings.whisperx_device,
-            compute_type=settings.whisperx_compute_type,
-        )
-        diarize_kwargs: dict[str, Any] = {"device": settings.whisperx_device}
-        if settings.hf_token:
-            diarize_kwargs["use_auth_token"] = settings.hf_token
-        diarizer = whisperx.DiarizationPipeline(
-            model_name=settings.diarization_model,
-            **diarize_kwargs,
-        )
-
-        self._whisperx = whisperx
-        self._model = model
-        self._diarizer = diarizer
+            log.info("Pipeline loaded (asr=%s, diarize_device=%s)",
+                     self._asr.name(), settings.whisperx_device)
 
     async def transcribe(
         self,
@@ -82,108 +55,71 @@ class TranscribePipeline:
         *,
         num_speakers: int | None = None,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> dict[str, Any]:
-        """Run the full transcribe -> align -> diarize -> assign-speakers pipeline.
-
-        Concurrency is gated by self._semaphore so we never exceed
-        MAX_CONCURRENT_JOBS regardless of request rate.
-        """
         if not self._loaded:
             await self.load()
         async with self._semaphore:
-            return await asyncio.to_thread(
-                self._transcribe_blocking,
-                audio_path,
-                num_speakers,
-                language,
+            t_start = time.monotonic()
+            asr_result, turns = await asyncio.gather(
+                self._asr.transcribe(audio_path, language=language, task=task),
+                self._diarizer.turns(audio_path, num_speakers=num_speakers),
             )
-
-    def _transcribe_blocking(
-        self,
-        audio_path: Path,
-        num_speakers: int | None,
-        language: str | None,
-    ) -> dict[str, Any]:
-        assert self._model is not None and self._diarizer is not None and self._whisperx is not None
-        whisperx = self._whisperx
-
-        t_start = time.monotonic()
-        audio = whisperx.load_audio(str(audio_path))
-        duration_seconds = float(len(audio)) / 16000.0  # whisperx loads at 16kHz
-
-        transcribe_kwargs: dict[str, Any] = {}
-        if language:
-            transcribe_kwargs["language"] = language
-        result = self._model.transcribe(audio, **transcribe_kwargs)
-        detected_language = result.get("language", language or "en")
-
-        # Alignment is per-language; cache by language code.
-        try:
-            align_model, align_meta = self._get_align_model(detected_language)
-            result = whisperx.align(
-                result["segments"],
-                align_model,
-                align_meta,
-                audio,
-                settings.whisperx_device,
-                return_char_alignments=False,
+            segments_with_speakers = stitch_speakers(asr_result.segments, turns)
+            # Optional Track B pass: relabel enrolled voices (e.g. Therapist /
+            # Client) after stitching. Flag-gated and off by default, so the /v1
+            # contract is unchanged unless explicitly enabled. Runs off-thread
+            # since it loads/uses the pyannote embedding model.
+            if settings.enable_role_labels:
+                from app.roles import role_labeler
+                segments_with_speakers = await asyncio.to_thread(
+                    role_labeler.label, audio_path, segments_with_speakers
+                )
+            speakers = self._count_speakers(segments_with_speakers)
+            elapsed = time.monotonic() - t_start
+            # Report the tier that actually served (asr_result.served_by), not
+            # the router chain; fall back to the configured backend's name.
+            served_by = asr_result.served_by or self._asr.name()
+            log.info(
+                "Transcribed %.1fs of audio in %.1fs (%.2fx realtime); "
+                "asr=%s language=%s speakers=%d",
+                asr_result.duration_seconds,
+                elapsed,
+                (asr_result.duration_seconds / elapsed) if elapsed > 0 else 0.0,
+                served_by,
+                asr_result.language,
+                speakers,
             )
-        except Exception as e:  # alignment failures should not fail the whole job
-            log.warning("Alignment failed for language=%s: %s; continuing without word timings.", detected_language, e)
-
-        diarize_kwargs: dict[str, Any] = {}
-        if num_speakers is not None:
-            diarize_kwargs["num_speakers"] = num_speakers
-        diarize_segments = self._diarizer(audio, **diarize_kwargs)
-        result = whisperx.assign_word_speakers(diarize_segments, result)
-
-        speakers = self._count_speakers(result)
-        elapsed = time.monotonic() - t_start
-        log.info(
-            "Transcribed %.1fs of audio in %.1fs (%.2fx realtime); language=%s speakers=%d",
-            duration_seconds,
-            elapsed,
-            (duration_seconds / elapsed) if elapsed > 0 else 0.0,
-            detected_language,
-            speakers,
-        )
-        return {
-            "segments": result.get("segments", []),
-            "language": detected_language,
-            "duration_seconds": duration_seconds,
-            "speakers_detected": speakers,
-            "elapsed_seconds": elapsed,
-        }
-
-    def _get_align_model(self, language: str) -> tuple[Any, Any]:
-        assert self._whisperx is not None
-        if language not in self._align_models:
-            self._align_models[language] = self._whisperx.load_align_model(
-                language_code=language,
-                device=settings.whisperx_device,
-            )
-        return self._align_models[language]
+            return {
+                "segments": segments_with_speakers,
+                "language": asr_result.language,
+                "duration_seconds": asr_result.duration_seconds,
+                "speakers_detected": speakers,
+                "elapsed_seconds": elapsed,
+                "asr_backend": served_by,
+                "asr_model": asr_result.model,
+                "diarize_device": getattr(self._diarizer, "last_device", settings.whisperx_device),
+                "task": task,
+                # For translate, the segment text is English regardless of the
+                # detected source `language`.
+                "output_language": "en" if task == "translate" else asr_result.language,
+            }
 
     @staticmethod
-    def _count_speakers(result: dict[str, Any]) -> int:
+    def _count_speakers(segments: list[dict[str, Any]]) -> int:
         speakers: set[str] = set()
-        for seg in result.get("segments", []):
+        for seg in segments:
             spk = seg.get("speaker")
-            if spk:
+            if spk and spk != "SPEAKER_??":
                 speakers.add(spk)
-            for word in seg.get("words", []):
-                spk = word.get("speaker")
-                if spk:
-                    speakers.add(spk)
         return len(speakers)
 
 
 def render_txt(result: dict[str, Any]) -> str:
-    """Render WhisperX-style result to a speaker-labeled .txt.
+    """Render pipeline result to a speaker-labeled .txt.
 
     One paragraph per speaker turn (consecutive same-speaker segments merged),
     '[mm:ss] SPEAKER_XX: text' prefix using the start time of the turn.
-    Two newlines between turns.
     """
     paragraphs: list[tuple[float, str, list[str]]] = []
     for seg in result.get("segments", []):
@@ -204,33 +140,58 @@ def render_txt(result: dict[str, Any]) -> str:
 
 
 def render_json(job_id: str, result: dict[str, Any]) -> str:
-    """Render WhisperX result + a header to JSON string.
-
-    If result['created_at'] is set (caller computed it before transcription
-    started), use it so the JSON header timestamp matches the on-disk
-    filename's date/time. Otherwise fall back to now.
-    """
+    """Render pipeline result + a header to JSON string."""
     payload = {
         "id": job_id,
         "created_at": result.get("created_at") or datetime.now(timezone.utc).isoformat(),
         "duration_seconds": result.get("duration_seconds"),
         "language": result.get("language"),
+        "task": result.get("task") or "transcribe",
+        "output_language": result.get("output_language") or result.get("language"),
         "speakers_detected": result.get("speakers_detected"),
-        "model": settings.whisper_model,
+        "model": result.get("asr_model") or settings.whisper_model,
         "compute_type": settings.whisperx_compute_type,
         "device": settings.whisperx_device,
         "diarization_model": settings.diarization_model,
+        "diarize_device": result.get("diarize_device"),
+        "asr_backend": result.get("asr_backend"),
         "segments": result.get("segments", []),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default)
 
 
 def _json_default(obj: Any) -> Any:
-    # WhisperX may return numpy floats / ints in segments.
     try:
         return float(obj)
     except (TypeError, ValueError):
         return str(obj)
 
 
-pipeline = TranscribePipeline()
+def _build_asr_backend() -> ASRBackend:
+    if settings.asr_backend == "whisperx":
+        return LocalWhisperXASR()
+    if settings.asr_backend == "router":
+        from app.asr import ASRRouter, SpeachesASR
+        hosts = [h.strip() for h in settings.asr_hosts.split(",") if h.strip()]
+        if not hosts:
+            log.warning("ASR_BACKEND=router but ASR_HOSTS is empty; using LocalWhisperXASR")
+            return LocalWhisperXASR()
+        backends: list[ASRBackend] = []
+        for h in hosts:
+            if h == "local-whisperx":
+                backends.append(LocalWhisperXASR())
+            elif h.startswith("http://") or h.startswith("https://"):
+                backends.append(SpeachesASR(
+                    base_url=h,
+                    model_id=settings.asr_model_id,
+                    healthcheck_timeout_s=settings.asr_healthcheck_timeout_s,
+                ))
+            else:
+                log.warning("Ignoring unrecognized ASR_HOSTS entry: %r", h)
+        if not backends:
+            return LocalWhisperXASR()
+        return ASRRouter(backends)
+    raise ValueError(f"Unknown ASR_BACKEND={settings.asr_backend!r}; expected 'whisperx' or 'router'")
+
+
+pipeline = TranscribePipeline(asr=_build_asr_backend())

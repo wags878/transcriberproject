@@ -1,0 +1,19 @@
+{
+  "name": "3spk_standup",
+  "description": "Three distinct voices; tests diarization beyond two speakers.",
+  "silence_ms": 400,
+  "voices": {
+    "A": "en-US-AriaNeural",
+    "B": "en-US-GuyNeural",
+    "C": "en-GB-SoniaNeural"
+  },
+  "turns": [
+    {"speaker": "A", "text": "Morning, everyone. Let's keep this quick. What did you get done yesterday?"},
+    {"speaker": "B", "text": "I finished the migration script and it's running against staging now."},
+    {"speaker": "C", "text": "I reviewed the design doc and left a few comments about the caching layer."},
+    {"speaker": "A", "text": "Great. Any blockers I should know about?"},
+    {"speaker": "B", "text": "Just waiting on the database credentials for production. Otherwise I'm clear."},
+    {"speaker": "C", "text": "No blockers on my side. I'll pair with you once those credentials come through."},
+    {"speaker": "A", "text": "Perfect. I'll chase the credentials right after this. Let's regroup tomorrow."}
+  ]
+}

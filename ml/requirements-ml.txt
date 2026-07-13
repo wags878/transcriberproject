@@ -1,0 +1,14 @@
+# Offline ML tooling deps — kept SEPARATE from the service's requirements.txt.
+# Nothing here is installed into the serving image; these run only in the ml/
+# container (see ml/Dockerfile) or a host venv.
+
+# WER / text alignment scoring.
+jiwer==3.0.4
+
+# Neural TTS for the synthetic conversation generator (edge-tts + ffmpeg recipe).
+# 7.x is required: Microsoft's endpoint now demands a Sec-MS-GEC handshake token
+# that 6.x doesn't send (older versions 403 on the WSS connect).
+edge-tts==7.2.8
+
+# HTTP client to drive the live API. Pinned to match the service (requirements.txt).
+httpx==0.27.2

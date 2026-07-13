@@ -14,6 +14,7 @@ os.environ["DATA_DIR"] = str(_TMP_DATA)
 os.environ["HF_HOME"] = str(_TMP_DATA / "models" / "hf")
 os.environ.setdefault("WHISPERX_DEVICE", "cpu")
 os.environ.setdefault("WHISPERX_COMPUTE_TYPE", "int8")
+os.environ.setdefault("ASR_BACKEND", "whisperx")
 
 
 @pytest.fixture(scope="session")
@@ -29,7 +30,7 @@ def client() -> Iterator:
     async def _stub_load() -> None:
         return None
 
-    async def _stub_transcribe(audio_path: Path, *, num_speakers=None, language=None):
+    async def _stub_transcribe(audio_path: Path, *, num_speakers=None, language=None, task="transcribe"):
         # Three segments where 0 and 1 share SPEAKER_00 — exercises the
         # paragraph-merge path in render_txt.
         return {

@@ -1,0 +1,35 @@
+# Offline ML harness (Track A). Separate compose project from the service — it
+# only talks to the running stack over HTTP, so bring the service up first
+# (docker compose -f docker-compose.gpu.yml up -d) then run this.
+#
+#   # full baseline (generate → transcribe → score → scorecard):
+#   docker compose -f ml/docker-compose.ml.yml run --rm ml-eval
+#
+#   # just generate one clip:
+#   docker compose -f ml/docker-compose.ml.yml run --rm ml-eval \
+#       python -m ml.synth.generate --script ml/synth/scripts/2spk_short.json --out-dir ml/synth/out
+#
+# The service is published on the host at 127.0.0.1:8000 by the tailscale
+# sidecar; from inside this container that host is host.docker.internal.
+name: transcribe-svc-ml
+
+services:
+  ml-eval:
+    build:
+      context: ..
+      dockerfile: ml/Dockerfile
+    image: transcribe-svc-ml:latest
+    # API_TOKEN (and anything else) comes from the repo-root .env.
+    env_file:
+      - ../.env
+    environment:
+      BASE_URL: ${BASE_URL:-http://host.docker.internal:8000}
+    extra_hosts:
+      # Reach the host-published service from the container on Linux too.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Mount ml/ over the baked-in copy: live code edits without rebuild, and
+      # generated clips (synth/out) + the scorecard (eval/reports) persist to host.
+      - .:/app/ml
+    working_dir: /app
+    command: ["python", "-m", "ml.eval.run_baseline"]
