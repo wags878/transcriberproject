@@ -46,6 +46,7 @@ function speakerLabel(raw) { return raw === "SPEAKER_??" ? "?" : raw; }
 
   $("record").addEventListener("click", toggleRecord);
   $("go").addEventListener("click", transcribe);
+  $("edit-btn").addEventListener("click", toggleEdit);
   $("copy-btn").addEventListener("click", copyTranscript);
   $("dl-txt").addEventListener("click", () => download(currentUrls.txt, "transcript.txt"));
   $("dl-json").addEventListener("click", () => download(currentUrls.json, "transcript.json"));
@@ -148,6 +149,9 @@ async function transcribe() {
     fd.append("audio", blob, blobName);
     if ($("title").value.trim()) fd.append("title", $("title").value.trim());
     if ($("spk").value) fd.append("num_speakers", $("spk").value);
+    // Empty value = auto-detect (omit the field). Defaults to English so an
+    // unfiltered intro can't silently mis-detect the language.
+    if ($("lang").value) fd.append("language", $("lang").value);
 
     const r = await fetch("/v1/transcribe", { method: "POST", headers: authHeaders(), body: fd });
     if (r.status === 401) throw new Error("401 Unauthorized — check your API token (⚙ Settings).");
@@ -172,28 +176,56 @@ async function transcribe() {
 }
 
 /* ---------- render ---------- */
-function turnsFromSegments(segs) {
+// View state so we can re-render on speaker edits without refetching.
+let view = { doc: null, meta: null, wall: 0, audioUrl: null };
+let editLabels = [];   // one final speaker label per segment (the edit buffer)
+let editMode = false;
+
+function buildTurns(segs, labels) {
   const turns = [];
-  for (const s of (segs || [])) {
-    const text = (s.text || "").trim(); if (!text) continue;
-    const spk = s.speaker || "SPEAKER_??";
+  (segs || []).forEach((s, i) => {
+    const text = (s.text || "").trim(); if (!text) return;
+    const spk = labels[i] || s.speaker || "SPEAKER_??";
     const last = turns[turns.length - 1];
-    if (last && last.speaker === spk) last.text += " " + text;
-    else turns.push({ speaker: spk, start: +s.start || 0, text });
-  }
+    if (last && last.speaker === spk) { last.text += " " + text; last.idxs.push(i); }
+    else turns.push({ speaker: spk, start: +s.start || 0, text, idxs: [i] });
+  });
   return turns;
 }
 
+function distinctLabels() {
+  const seen = [];
+  for (const l of editLabels) if (l !== "SPEAKER_??" && !seen.includes(l)) seen.push(l);
+  return seen;
+}
+function isDirty() {
+  const orig = (view.doc && view.doc.segments || []).map(s => s.speaker || "SPEAKER_??");
+  return editLabels.length === orig.length && editLabels.some((l, i) => l !== orig[i]);
+}
+
 function renderResult(doc, meta, wall, audioUrl) {
-  const turns = turnsFromSegments(doc.segments);
+  view = { doc, meta, wall, audioUrl };
+  currentJobId = doc.id || (meta && meta.id) || "";
+  editLabels = (doc.segments || []).map(s => s.speaker || "SPEAKER_??");
+  editMode = false;
+  renderView();
+  $("result").hidden = false;
+  $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderView() {
+  const { doc, meta, wall, audioUrl } = view;
   const gpu = (doc.asr_backend || "").startsWith("speaches");
   $("result-title").textContent = doc.id ? ($("title").value.trim() || "Transcript") : "Transcript";
+  $("edit-btn").textContent = editMode ? "Done" : "✎ Edit speakers";
+  $("edit-btn").classList.toggle("primary", editMode);
 
+  const speakersNow = distinctLabels().length;
   $("meta").innerHTML = "";
   const chips = [
     `${(meta.duration_seconds || 0).toFixed(1)}s audio`,
     `${wall ? wall.toFixed(1) + "s processing" : ""}`,
-    `${meta.speakers_detected} speaker${meta.speakers_detected == 1 ? "" : "s"}`,
+    `${speakersNow} speaker${speakersNow === 1 ? "" : "s"}`,
     `lang ${meta.language || "?"}`,
   ];
   for (const c of chips) { if (!c) continue; const s = document.createElement("span"); s.textContent = c; $("meta").appendChild(s); }
@@ -205,29 +237,138 @@ function renderResult(doc, meta, wall, audioUrl) {
   const ra = $("result-audio");
   if (audioUrl) { ra.src = audioUrl; ra.hidden = false; } else { ra.removeAttribute("src"); ra.hidden = true; }
 
-  const spkColors = {}; let ci = 0;
+  renderTranscript();
+}
+
+// Stable color per label so renames keep their hue.
+function labelColor(label, order) {
+  if (label === "SPEAKER_??") return "var(--muted)";
+  return `var(--spk${order % 6})`;
+}
+// Pretty display: anonymous SPEAKER_00 -> "Speaker 1"; custom names shown as-is.
+function displaySpeaker(label, order) {
+  if (label === "SPEAKER_??") return "Speaker ?";
+  if (/^SPEAKER_\d+$/.test(label)) return "Speaker " + (order + 1);
+  return label;
+}
+function avatarFor(label, order) {
+  if (label === "SPEAKER_??") return "?";
+  if (/^SPEAKER_\d+$/.test(label)) return String(order + 1);
+  return (label.trim()[0] || "•").toUpperCase();
+}
+
+function renderTranscript() {
+  const { doc, audioUrl } = view;
+  const labels = distinctLabels();
+  const turns = buildTurns(doc.segments, editLabels);
   const wrap = $("transcript"); wrap.innerHTML = "";
+
+  if (editMode) wrap.appendChild(buildLegendEditor(labels));
+
   turns.forEach((t) => {
-    if (!(t.speaker in spkColors)) spkColors[t.speaker] = t.speaker === "SPEAKER_??" ? "var(--muted)" : `var(--spk${ci++ % 6})`;
+    const order = Math.max(0, labels.indexOf(t.speaker));
+    const color = labelColor(t.speaker, order);
+    const isUnknown = t.speaker === "SPEAKER_??";
     const el = document.createElement("div"); el.className = "turn";
-    const idx = Object.keys(spkColors).indexOf(t.speaker) + 1;
-    el.innerHTML =
-      `<div class="avatar" style="background:${spkColors[t.speaker]}">${t.speaker === "SPEAKER_??" ? "?" : idx}</div>` +
-      `<div class="turn-body"><div class="turn-head">` +
-      `<span class="turn-spk" style="color:${spkColors[t.speaker]}">Speaker ${t.speaker === "SPEAKER_??" ? "?" : idx}</span>` +
-      `<span class="turn-time">${fmtTime(t.start)}</span></div>` +
-      `<div class="turn-text"></div></div>`;
-    el.querySelector(".turn-text").textContent = t.text;
-    el.addEventListener("click", () => {
+
+    const head = document.createElement("div"); head.className = "turn-head";
+    if (editMode) {
+      // Reassign this turn to another speaker.
+      const sel = document.createElement("select");
+      sel.className = "turn-reassign";
+      labels.forEach((l, lo) => {
+        const o = document.createElement("option"); o.value = l; o.textContent = displaySpeaker(l, lo);
+        if (l === t.speaker) o.selected = true; sel.appendChild(o);
+      });
+      if (isUnknown) { const o = document.createElement("option"); o.value = "SPEAKER_??"; o.textContent = "Speaker ?"; o.selected = true; sel.appendChild(o); }
+      sel.style.color = color;
+      sel.addEventListener("change", () => { for (const i of t.idxs) editLabels[i] = sel.value; onEdit(); });
+      head.appendChild(sel);
+    } else {
+      const spk = document.createElement("span");
+      spk.className = "turn-spk"; spk.style.color = color;
+      spk.textContent = displaySpeaker(t.speaker, order);
+      head.appendChild(spk);
+    }
+    const time = document.createElement("span"); time.className = "turn-time"; time.textContent = fmtTime(t.start);
+    head.appendChild(time);
+
+    el.innerHTML = `<div class="avatar" style="background:${color}">${avatarFor(t.speaker, order)}</div>`;
+    const body = document.createElement("div"); body.className = "turn-body";
+    body.appendChild(head);
+    const txt = document.createElement("div"); txt.className = "turn-text"; txt.textContent = t.text;
+    body.appendChild(txt);
+    el.appendChild(body);
+
+    if (!editMode) el.addEventListener("click", () => {
       if (!audioUrl) return;
+      const ra = $("result-audio");
       document.querySelectorAll(".turn.active").forEach(x => x.classList.remove("active"));
       el.classList.add("active");
       ra.currentTime = t.start; ra.play();
     });
     wrap.appendChild(el);
   });
-  $("result").hidden = false;
-  $("result").scrollIntoView({ behavior: "smooth", block: "start" });
+
+  if (editMode) wrap.appendChild(buildSaveBar());
+}
+
+function buildLegendEditor(labels) {
+  const box = document.createElement("div"); box.className = "legend-editor";
+  const hint = document.createElement("p"); hint.className = "legend-hint";
+  hint.textContent = "Rename a speaker (applies everywhere), or use the dropdown on a turn to reassign it.";
+  box.appendChild(hint);
+  labels.forEach((label, order) => {
+    const row = document.createElement("div"); row.className = "legend-row";
+    const dot = document.createElement("span"); dot.className = "legend-dot"; dot.style.background = labelColor(label, order);
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = label; inp.className = "legend-input";
+    const rename = () => {
+      const nv = inp.value.trim(); if (!nv || nv === label) return;
+      editLabels = editLabels.map(l => l === label ? nv : l);
+      onEdit();
+    };
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { rename(); inp.blur(); } });
+    inp.addEventListener("blur", rename);
+    row.appendChild(dot); row.appendChild(inp); box.appendChild(row);
+  });
+  return box;
+}
+
+function buildSaveBar() {
+  const bar = document.createElement("div"); bar.className = "save-bar";
+  const status = document.createElement("span"); status.className = "save-status";
+  status.textContent = isDirty() ? "Unsaved changes" : "No changes";
+  const save = document.createElement("button"); save.className = "btn tiny primary"; save.textContent = "Save labels";
+  save.disabled = !isDirty();
+  save.addEventListener("click", saveLabels);
+  const cancel = document.createElement("button"); cancel.className = "btn tiny ghost"; cancel.textContent = "Revert";
+  cancel.addEventListener("click", () => { renderResult(view.doc, view.meta, view.wall, view.audioUrl); });
+  bar.appendChild(status); bar.appendChild(cancel); bar.appendChild(save);
+  return bar;
+}
+
+// Re-render just the transcript region after an in-place edit (keeps focus flow simple).
+function onEdit() { renderTranscript(); }
+
+function toggleEdit() { editMode = !editMode; renderView(); }
+
+async function saveLabels() {
+  if (!currentJobId) { setErr("No job to save (open a transcript first)."); return; }
+  try {
+    const r = await fetch(`/v1/results/${currentJobId}/relabel`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ speakers: editLabels }),
+    });
+    if (!r.ok) throw new Error("Save failed " + r.status + ": " + (await r.text()));
+    const updated = await r.json();
+    view.doc = updated;
+    editLabels = updated.segments.map(s => s.speaker || "SPEAKER_??");
+    editMode = false;
+    renderView();
+    // Reflect the new speaker count in history.
+    bumpHistorySpeakers(currentJobId, updated.speakers_detected);
+  } catch (e) { setErr(e.message); }
 }
 
 function shortModel(m) {
@@ -238,8 +379,13 @@ function shortModel(m) {
 
 /* ---------- actions ---------- */
 function copyTranscript() {
-  const lines = [...document.querySelectorAll(".turn")].map(t =>
-    `${t.querySelector(".turn-spk").textContent} [${t.querySelector(".turn-time").textContent}]: ${t.querySelector(".turn-text").textContent}`);
+  // Copy from the edit buffer so it reflects current (possibly edited) labels.
+  const turns = buildTurns((view.doc && view.doc.segments) || [], editLabels);
+  const labels = distinctLabels();
+  const lines = turns.map(t => {
+    const spk = displaySpeaker(t.speaker, Math.max(0, labels.indexOf(t.speaker)));
+    return `${spk} [${fmtTime(t.start)}]: ${t.text}`;
+  });
   navigator.clipboard.writeText(lines.join("\n\n")).then(() => flash($("copy-btn"), "Copied"));
 }
 function flash(btn, msg) { const o = btn.textContent; btn.textContent = msg; setTimeout(() => btn.textContent = o, 1200); }
@@ -258,6 +404,11 @@ function addHistory(item) {
   h.unshift(item);
   localStorage.setItem(HISTKEY, JSON.stringify(h.slice(0, 25)));
   renderHistory();
+}
+function bumpHistorySpeakers(jobId, speakers) {
+  const h = loadHist();
+  const it = h.find(x => x.id === jobId);
+  if (it) { it.speakers = speakers; localStorage.setItem(HISTKEY, JSON.stringify(h)); renderHistory(); }
 }
 function renderHistory() {
   const h = loadHist(); const ul = $("history"); ul.innerHTML = "";

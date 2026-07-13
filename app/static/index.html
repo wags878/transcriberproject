@@ -58,6 +58,18 @@
     <div class="options">
       <label>Title <input type="text" id="title" placeholder="optional" /></label>
       <label>Speakers <input type="number" id="spk" min="1" max="10" placeholder="auto" /></label>
+      <label>Language
+        <select id="lang">
+          <option value="en" selected>English</option>
+          <option value="">Auto-detect</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </label>
     </div>
 
     <button class="btn primary big" id="go" disabled>Transcribe</button>
@@ -73,6 +85,7 @@
     <div class="result-head">
       <h2 class="card-title" id="result-title">Transcript</h2>
       <div class="result-actions">
+        <button class="btn tiny" id="edit-btn">✎ Edit speakers</button>
         <button class="btn tiny" id="copy-btn">Copy</button>
         <button class="btn tiny" id="dl-txt">.txt</button>
         <button class="btn tiny" id="dl-json">.json</button>

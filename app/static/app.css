@@ -128,6 +128,21 @@ audio { width: 100%; height: 38px; }
 .turn-time { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .turn-text { font-size: 14.5px; line-height: 1.55; }
 
+/* ---- speaker edit mode ---- */
+.turn-reassign { font-weight: 650; font-size: 13px; background: var(--bg2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px; padding: 2px 6px; cursor: pointer; }
+.legend-editor { border: 1px solid var(--line); background: var(--bg2); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 4px; display: grid; gap: 8px; }
+.legend-hint { font-size: 12.5px; color: var(--muted); margin: 0 0 2px; }
+.legend-row { display: flex; align-items: center; gap: 9px; }
+.legend-dot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto; }
+.legend-input { flex: 1; font-size: 14px; font-weight: 600; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+.legend-input:focus { outline: none; border-color: var(--accent); }
+.save-bar { display: flex; align-items: center; gap: 10px; justify-content: flex-end;
+  margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.save-status { margin-right: auto; font-size: 12.5px; color: var(--muted); }
+
 /* ---- library ---- */
 .history { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
 .history li { display: flex; align-items: center; justify-content: space-between; gap: 10px;
