@@ -24,8 +24,10 @@ class _StubBackend:
     async def health(self) -> bool:
         return self._healthy
 
-    async def transcribe(self, audio_path: Path, *, language: str | None = None) -> ASRResult:
+    async def transcribe(self, audio_path: Path, *, language: str | None = None,
+                         task: str = "transcribe") -> ASRResult:
         self.transcribe_called = True
+        self.transcribe_task = task
         return ASRResult(segments=self._segments, language="en", duration_seconds=1.0)
 
 
@@ -58,6 +60,13 @@ async def test_router_falls_through_when_first_unhealthy(tmp_audio: Path) -> Non
     assert result.served_by == "B"
 
 
+async def test_router_propagates_task(tmp_audio: Path) -> None:
+    a = _StubBackend("A", healthy=True)
+    router = ASRRouter([a])
+    await router.transcribe(tmp_audio, task="translate")
+    assert a.transcribe_task == "translate"
+
+
 async def test_router_raises_when_all_unhealthy(tmp_audio: Path) -> None:
     a = _StubBackend("A", healthy=False)
     b = _StubBackend("B", healthy=False)
@@ -68,7 +77,8 @@ async def test_router_raises_when_all_unhealthy(tmp_audio: Path) -> None:
 
 async def test_router_falls_through_on_transcribe_exception(tmp_audio: Path) -> None:
     class _Boom(_StubBackend):
-        async def transcribe(self, audio_path: Path, *, language: str | None = None) -> ASRResult:
+        async def transcribe(self, audio_path: Path, *, language: str | None = None,
+                             task: str = "transcribe") -> ASRResult:
             raise RuntimeError("kaboom")
 
     a = _Boom("A", healthy=True)

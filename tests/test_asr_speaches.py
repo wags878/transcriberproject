@@ -47,6 +47,40 @@ async def test_speaches_parses_verbose_json(tmp_audio: Path) -> None:
     assert result.model == "Systran/faster-whisper-large-v3"
 
 
+def _mock_post_client(fake_body):
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = AsyncMock()
+    mock_response.json = lambda: fake_body
+    mock_response.raise_for_status = lambda: None
+    mock_client.post = AsyncMock(return_value=mock_response)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_transcribe_hits_transcriptions_with_language(tmp_audio: Path) -> None:
+    backend = SpeachesASR(base_url="http://localhost:8001", model_id="m")
+    mock_client = _mock_post_client({"language": "es", "duration": 1.0, "segments": []})
+    with patch.object(backend, "_client", mock_client):
+        await backend.transcribe(tmp_audio, language="es", task="transcribe")
+    url = mock_client.post.call_args.args[0]
+    form = mock_client.post.call_args.kwargs["data"]
+    assert url.endswith("/v1/audio/transcriptions")
+    assert form["language"] == "es"
+
+
+@pytest.mark.asyncio
+async def test_translate_hits_translations_without_language(tmp_audio: Path) -> None:
+    backend = SpeachesASR(base_url="http://localhost:8001", model_id="m")
+    mock_client = _mock_post_client({"language": "es", "duration": 1.0, "segments": []})
+    with patch.object(backend, "_client", mock_client):
+        await backend.transcribe(tmp_audio, language="es", task="translate")
+    url = mock_client.post.call_args.args[0]
+    form = mock_client.post.call_args.kwargs["data"]
+    # translations endpoint outputs English; source is auto-detected (no language).
+    assert url.endswith("/v1/audio/translations")
+    assert "language" not in form
+
+
 @pytest.mark.asyncio
 async def test_speaches_health_ok_on_200(tmp_audio: Path) -> None:
     backend = SpeachesASR(

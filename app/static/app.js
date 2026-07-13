@@ -153,6 +153,8 @@ async function transcribe() {
     // Empty value = auto-detect (omit the field). Defaults to English so an
     // unfiltered intro can't silently mis-detect the language.
     if ($("lang").value) fd.append("language", $("lang").value);
+    // Output: "transcribe" (same as audio) or "translate" (force English).
+    if ($("task").value) fd.append("task", $("task").value);
 
     const r = await fetch("/v1/transcribe", { method: "POST", headers: authHeaders(), body: fd });
     if (r.status === 401) throw new Error("401 Unauthorized — check your API token (⚙ Settings).");
@@ -222,12 +224,13 @@ function renderView() {
   $("edit-btn").classList.toggle("primary", editMode);
 
   const speakersNow = distinctLabels().length;
+  const translated = (doc.task || meta.task) === "translate";
   $("meta").innerHTML = "";
   const chips = [
     `${(meta.duration_seconds || 0).toFixed(1)}s audio`,
     `${wall ? wall.toFixed(1) + "s processing" : ""}`,
     `${speakersNow} speaker${speakersNow === 1 ? "" : "s"}`,
-    `lang ${meta.language || "?"}`,
+    translated ? `${meta.language || "?"} → English (translated)` : `lang ${meta.language || "?"}`,
   ];
   for (const c of chips) { if (!c) continue; const s = document.createElement("span"); s.textContent = c; $("meta").appendChild(s); }
   const bk = document.createElement("span");

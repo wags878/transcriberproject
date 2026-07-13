@@ -33,6 +33,27 @@ def test_transcribe_happy_path(client, auth_headers, fake_audio) -> None:
     assert len(payload["segments"]) == 3
 
 
+def test_transcribe_accepts_translate_task(client, auth_headers, fake_audio) -> None:
+    r = client.post(
+        "/v1/transcribe",
+        headers=auth_headers,
+        files={"audio": ("clip.wav", fake_audio, "audio/wav")},
+        data={"title": "smoke", "task": "translate"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["task"] == "translate"
+
+
+def test_transcribe_rejects_bad_task(client, auth_headers, fake_audio) -> None:
+    r = client.post(
+        "/v1/transcribe",
+        headers=auth_headers,
+        files={"audio": ("clip.wav", fake_audio, "audio/wav")},
+        data={"task": "summarize"},
+    )
+    assert r.status_code == 400
+
+
 def test_results_404_for_unknown_job(client, auth_headers) -> None:
     r = client.get(
         "/v1/results/00000000-0000-0000-0000-000000000000/transcript.txt",

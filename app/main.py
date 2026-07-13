@@ -82,9 +82,15 @@ async def transcribe(
     title: str | None = Form(default=None),
     num_speakers: int | None = Form(default=None),
     language: str | None = Form(default=None),
+    task: str = Form(default="transcribe"),
 ) -> TranscribeResponse:
     if not audio.filename:
         raise HTTPException(status_code=400, detail="audio file required")
+    if task not in ("transcribe", "translate"):
+        raise HTTPException(
+            status_code=400,
+            detail="task must be 'transcribe' or 'translate'",
+        )
 
     job_id = storage.new_job_id()
     created_at = datetime.now(timezone.utc)
@@ -105,12 +111,17 @@ async def transcribe(
             upload_path,
             num_speakers=num_speakers,
             language=language or settings.language_or_none,
+            task=task,
         )
     except Exception as e:
         log.exception("Transcription failed for job %s", job_id)
         raise HTTPException(status_code=500, detail=f"transcription failed: {e}") from e
 
     result["created_at"] = created_at.isoformat()
+    # The requested task is authoritative for what the transcript text is, so
+    # stamp it (and the resulting output language) onto the result before render.
+    result["task"] = task
+    result["output_language"] = "en" if task == "translate" else (result.get("language") or "")
     txt_path = settings.outputs_dir / f"{stem}.txt"
     json_path = settings.outputs_dir / f"{stem}.json"
     txt_path.write_text(render_txt(result), encoding="utf-8")
@@ -126,6 +137,8 @@ async def transcribe(
         speakers_detected=int(result.get("speakers_detected") or 0),
         duration_seconds=float(result.get("duration_seconds") or 0.0),
         language=str(result.get("language") or ""),
+        task=str(result.get("task") or "transcribe"),
+        output_language=str(result.get("output_language") or result.get("language") or ""),
     )
 
 

@@ -58,7 +58,7 @@
     <div class="options">
       <label>Title <input type="text" id="title" placeholder="optional" /></label>
       <label>Speakers <input type="number" id="spk" min="1" max="10" placeholder="auto" /></label>
-      <label>Language
+      <label>Audio language
         <select id="lang">
           <option value="en" selected>English</option>
           <option value="">Auto-detect</option>
@@ -68,6 +68,12 @@
           <option value="pt">Portuguese</option>
           <option value="zh">Chinese</option>
           <option value="ja">Japanese</option>
+        </select>
+      </label>
+      <label>Output
+        <select id="task">
+          <option value="transcribe" selected>Same as audio</option>
+          <option value="translate">English (translate)</option>
         </select>
       </label>
     </div>

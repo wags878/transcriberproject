@@ -64,6 +64,7 @@ class ASRBackend(Protocol):
         audio_path: Path,
         *,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> ASRResult: ...
     def name(self) -> str: ...
 
@@ -74,7 +75,9 @@ class LocalWhisperXASR:
     """
 
     def __init__(self) -> None:
-        self._model: Any | None = None
+        # Models are keyed by task ("transcribe"/"translate"): whisperx bakes the
+        # task into the model at load time, so translate needs its own instance.
+        self._models: dict[str, Any] = {}
         self._whisperx: Any | None = None
         self._align_models: dict[str, tuple[Any, Any]] = {}
         self._loaded: bool = False
@@ -93,20 +96,24 @@ class LocalWhisperXASR:
                 settings.whisperx_device,
                 settings.whisperx_compute_type,
             )
-            await asyncio.to_thread(self._load_blocking)
+            await asyncio.to_thread(self._get_model, "transcribe")
             self._loaded = True
 
-    def _load_blocking(self) -> None:
-        os.environ.setdefault("HF_HOME", str(settings.hf_home))
-        import whisperx  # type: ignore
-
-        model = whisperx.load_model(
-            settings.whisper_model,
-            device=settings.whisperx_device,
-            compute_type=settings.whisperx_compute_type,
-        )
-        self._whisperx = whisperx
-        self._model = model
+    def _get_model(self, task: str) -> Any:
+        """Lazily load (and cache) a whisperx model for the given task."""
+        if self._whisperx is None:
+            os.environ.setdefault("HF_HOME", str(settings.hf_home))
+            import whisperx  # type: ignore
+            self._whisperx = whisperx
+        if task not in self._models:
+            log.info("Loading whisperx model for task=%s", task)
+            self._models[task] = self._whisperx.load_model(
+                settings.whisper_model,
+                device=settings.whisperx_device,
+                compute_type=settings.whisperx_compute_type,
+                task=task,
+            )
+        return self._models[task]
 
     async def health(self) -> bool:
         # Local backend is always available; loading may be slow but never
@@ -119,29 +126,35 @@ class LocalWhisperXASR:
         audio_path: Path,
         *,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> ASRResult:
-        if not self._loaded:
-            await self.load()
-        return await asyncio.to_thread(self._transcribe_blocking, audio_path, language)
+        return await asyncio.to_thread(
+            self._transcribe_blocking, audio_path, language, task
+        )
 
     def _transcribe_blocking(
         self,
         audio_path: Path,
         language: str | None,
+        task: str,
     ) -> ASRResult:
-        assert self._model is not None and self._whisperx is not None
+        model = self._get_model(task)
         whisperx = self._whisperx
+        assert whisperx is not None
         audio = whisperx.load_audio(str(audio_path))
         duration_seconds = float(len(audio)) / 16000.0
 
         transcribe_kwargs: dict[str, Any] = {}
         if language:
             transcribe_kwargs["language"] = language
-        result = self._model.transcribe(audio, **transcribe_kwargs)
+        result = model.transcribe(audio, **transcribe_kwargs)
         detected_language = result.get("language", language or "en")
+        # translate always emits English text, so align against English rather
+        # than the detected source language.
+        align_language = "en" if task == "translate" else detected_language
 
         try:
-            align_model, align_meta = self._get_align_model(detected_language)
+            align_model, align_meta = self._get_align_model(align_language)
             aligned = whisperx.align(
                 result["segments"],
                 align_model,
@@ -154,7 +167,7 @@ class LocalWhisperXASR:
         except Exception as e:
             log.warning(
                 "Alignment failed for language=%s: %s; returning coarse segments.",
-                detected_language, e,
+                align_language, e,
             )
             segments = result.get("segments", [])
 
@@ -228,6 +241,7 @@ class SpeachesASR:
         audio_path: Path,
         *,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> ASRResult:
         with audio_path.open("rb") as fh:
             data = fh.read()
@@ -236,13 +250,17 @@ class SpeachesASR:
             "model": self._model_id,
             "response_format": self._response_format,
         }
-        if language:
-            form["language"] = language
-        resp = await self._client.post(
-            f"{self._base_url}/v1/audio/transcriptions",
-            files=files,
-            data=form,
-        )
+        # translate → the OpenAI translations endpoint, which always outputs
+        # English (Whisper only does X→English). It takes no output-language
+        # param; the source is auto-detected. transcribe → the transcriptions
+        # endpoint, where `language` hints the source.
+        if task == "translate":
+            endpoint = f"{self._base_url}/v1/audio/translations"
+        else:
+            endpoint = f"{self._base_url}/v1/audio/transcriptions"
+            if language:
+                form["language"] = language
+        resp = await self._client.post(endpoint, files=files, data=form)
         resp.raise_for_status()
         body = resp.json()
         segments = [
@@ -296,6 +314,7 @@ class ASRRouter:
         audio_path: Path,
         *,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> ASRResult:
         last_exc: Exception | None = None
         for b in self._backends:
@@ -303,8 +322,8 @@ class ASRRouter:
                 log.info("ASRRouter: backend %s unhealthy, skipping", b.name())
                 continue
             try:
-                log.info("ASRRouter: routing to %s", b.name())
-                result = await b.transcribe(audio_path, language=language)
+                log.info("ASRRouter: routing to %s (task=%s)", b.name(), task)
+                result = await b.transcribe(audio_path, language=language, task=task)
                 # Preserve the concrete backend's identity; only fill in if a
                 # backend didn't set it, so the pipeline reports the tier that
                 # actually served rather than the whole router chain.

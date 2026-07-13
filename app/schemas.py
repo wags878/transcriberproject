@@ -16,7 +16,9 @@ class TranscribeResponse(BaseModel):
     transcript_json_url: str
     speakers_detected: int
     duration_seconds: float
-    language: str
+    language: str            # detected source language
+    task: str = "transcribe"
+    output_language: str = ""  # language of the transcript text ('en' for translate)
 
 
 class StorageResponse(BaseModel):

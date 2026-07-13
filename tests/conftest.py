@@ -30,7 +30,7 @@ def client() -> Iterator:
     async def _stub_load() -> None:
         return None
 
-    async def _stub_transcribe(audio_path: Path, *, num_speakers=None, language=None):
+    async def _stub_transcribe(audio_path: Path, *, num_speakers=None, language=None, task="transcribe"):
         # Three segments where 0 and 1 share SPEAKER_00 — exercises the
         # paragraph-merge path in render_txt.
         return {

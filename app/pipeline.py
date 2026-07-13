@@ -55,13 +55,14 @@ class TranscribePipeline:
         *,
         num_speakers: int | None = None,
         language: str | None = None,
+        task: str = "transcribe",
     ) -> dict[str, Any]:
         if not self._loaded:
             await self.load()
         async with self._semaphore:
             t_start = time.monotonic()
             asr_result, turns = await asyncio.gather(
-                self._asr.transcribe(audio_path, language=language),
+                self._asr.transcribe(audio_path, language=language, task=task),
                 self._diarizer.turns(audio_path, num_speakers=num_speakers),
             )
             segments_with_speakers = stitch_speakers(asr_result.segments, turns)
@@ -97,6 +98,10 @@ class TranscribePipeline:
                 "elapsed_seconds": elapsed,
                 "asr_backend": served_by,
                 "asr_model": asr_result.model,
+                "task": task,
+                # For translate, the segment text is English regardless of the
+                # detected source `language`.
+                "output_language": "en" if task == "translate" else asr_result.language,
             }
 
     @staticmethod
@@ -140,6 +145,8 @@ def render_json(job_id: str, result: dict[str, Any]) -> str:
         "created_at": result.get("created_at") or datetime.now(timezone.utc).isoformat(),
         "duration_seconds": result.get("duration_seconds"),
         "language": result.get("language"),
+        "task": result.get("task") or "transcribe",
+        "output_language": result.get("output_language") or result.get("language"),
         "speakers_detected": result.get("speakers_detected"),
         "model": result.get("asr_model") or settings.whisper_model,
         "compute_type": settings.whisperx_compute_type,

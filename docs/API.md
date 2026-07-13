@@ -43,7 +43,8 @@ Content-Type: `multipart/form-data`.
 | `audio` | file | yes | WAV, MP3, M4A, or FLAC. Max size = `MAX_UPLOAD_MB` (default 500). |
 | `title` | string | no | Used to build the on-disk filename (slugified). Default is `untitled`. |
 | `num_speakers` | int | no | Hint for diarization. Omit to auto-detect. |
-| `language` | string | no | ISO-639-1 code (`en`, `es`, …). Omit to auto-detect. |
+| `language` | string | no | Source-audio ISO-639-1 code (`en`, `es`, …). Omit to auto-detect. |
+| `task` | string | no | `transcribe` (default) → output in the source language; `translate` → output in **English**. Whisper only translates X→English; other output languages are not supported natively. |
 
 **Response 200:**
 ```json
@@ -53,14 +54,19 @@ Content-Type: `multipart/form-data`.
   "transcript_json_url": "/v1/results/5b2f2e1b-.../transcript.json",
   "speakers_detected": 2,
   "duration_seconds": 1834.5,
-  "language": "en"
+  "language": "en",
+  "task": "transcribe",
+  "output_language": "en"
 }
 ```
+
+`language` is the detected **source** language; `output_language` is the language
+of the transcript text (`en` whenever `task=translate`).
 
 **Errors:**
 | Status | Meaning |
 |---|---|
-| 400 | Missing `audio` field |
+| 400 | Missing `audio` field, or `task` not in {`transcribe`,`translate`} |
 | 401 | Missing / invalid bearer token |
 | 413 | Upload exceeds `MAX_UPLOAD_MB` |
 | 500 | Pipeline failure (see container logs) |
@@ -105,6 +111,8 @@ Auth: required.
   "created_at": "2026-04-30T18:42:11+00:00",
   "duration_seconds": 1834.5,
   "language": "en",
+  "task": "transcribe",
+  "output_language": "en",
   "speakers_detected": 2,
   "model": "large-v3",
   "compute_type": "int8",
@@ -219,9 +227,11 @@ token in `localStorage` and calls the same `/v1/*` endpoints — the API stays
 auth-gated. Reach it at `http://localhost:8000` (host loopback, published by the
 GPU compose) or over the tailnet. See `docs/DEPLOY.md`.
 
-Client features: a **language selector** (defaults to English so an unfiltered
-intro can't silently mis-detect the language — set it to *Auto-detect* for
-non-English audio), and **✎ Edit speakers** on a result — rename a speaker across
+Client features: an **Audio language** selector (defaults to English so an
+unfiltered intro can't silently mis-detect the language — set it to *Auto-detect*
+for non-English audio), an **Output** selector (*Same as audio* or *English
+(translate)*; arbitrary target languages are a planned translation-model
+follow-up), and **✎ Edit speakers** on a result — rename a speaker across
 the whole transcript or reassign an individual turn, saved via
 `POST /v1/results/{id}/relabel`. The service worker is network-first **and**
 fetches shell assets with `cache: "no-store"`, so a redeploy is picked up on the
