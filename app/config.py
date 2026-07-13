@@ -54,6 +54,28 @@ class Settings(BaseSettings):
     # Health-check timeout per backend in seconds.
     asr_healthcheck_timeout_s: float = Field(default=2.0, alias="ASR_HEALTHCHECK_TIMEOUT_S")
 
+    # --- Track B: speaker role labels (voice enrollment) ---
+    # Off by default: when false the /v1 contract is unchanged and speakers stay
+    # anonymous SPEAKER_00/01. When true, the pipeline embeds each diarized
+    # cluster after stitching, cosine-matches it against enrolled voiceprints in
+    # ENROLLMENTS_DIR, and relabels matches (e.g. 'Therapist'), inferring the
+    # other speaker as CLIENT_LABEL in a 2-speaker session.
+    enable_role_labels: bool = Field(default=False, alias="ENABLE_ROLE_LABELS")
+    # Directory of enrolled *.npy voiceprints (built offline by ml/enroll). These
+    # are biometric data — keep them out of the repo and off shared storage.
+    enrollments_dir: Path = Field(default=Path("/data/enrollments"), alias="ENROLLMENTS_DIR")
+    # Pretrained speaker-embedding model (pyannote wespeaker; already cached by
+    # the diarizer, so no new dependency). See ml/enroll/embed.py.
+    embedding_model: str = Field(
+        default="pyannote/wespeaker-voxceleb-resnet34-LM",
+        alias="EMBEDDING_MODEL",
+    )
+    # Minimum cosine similarity to accept an enrollment match. Operating point
+    # chosen by ml/enroll/sweep.py — see its report. Conservative default.
+    role_match_threshold: float = Field(default=0.5, alias="ROLE_MATCH_THRESHOLD")
+    # Label applied to the non-enrolled speaker in a 2-speaker session.
+    client_label: str = Field(default="Client", alias="CLIENT_LABEL")
+
     # Tailscale sidecar reusable auth key. Only consumed by the tailscale
     # container itself; the app never reads it. Kept in Settings so a
     # missing value is a clear config error at startup.
@@ -74,6 +96,10 @@ class Settings(BaseSettings):
     @property
     def language_or_none(self) -> str | None:
         return self.whisper_language or None
+
+    @property
+    def hf_home_str(self) -> str:
+        return str(self.hf_home)
 
 
 settings = Settings()
