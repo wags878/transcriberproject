@@ -65,6 +65,15 @@ class TranscribePipeline:
                 self._diarizer.turns(audio_path, num_speakers=num_speakers),
             )
             segments_with_speakers = stitch_speakers(asr_result.segments, turns)
+            # Optional Track B pass: relabel enrolled voices (e.g. Therapist /
+            # Client) after stitching. Flag-gated and off by default, so the /v1
+            # contract is unchanged unless explicitly enabled. Runs off-thread
+            # since it loads/uses the pyannote embedding model.
+            if settings.enable_role_labels:
+                from app.roles import role_labeler
+                segments_with_speakers = await asyncio.to_thread(
+                    role_labeler.label, audio_path, segments_with_speakers
+                )
             speakers = self._count_speakers(segments_with_speakers)
             elapsed = time.monotonic() - t_start
             # Report the tier that actually served (asr_result.served_by), not
