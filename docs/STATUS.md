@@ -420,3 +420,44 @@ pyannote diarization + real embedding on `2spk_long` → voice A's turns render 
 
 **Deferred / on deck:** Infra I (GPU diarization), Track C (LoRA scaffold).
 
+---
+
+## 2026-07-12 — Operator-driven UX batch (language, speaker editing, output language)
+
+Shipped and **deployed to the live GPU stack** off operator feedback while testing
+real (public, non-PHI) therapy clips. Branches `pwa-manual-controls` then
+`output-language`.
+
+**Trigger:** a real clip came back as "Welsh gibberish" — Whisper auto-detected
+`cy` from an unfiltered video intro and rendered the whole English session in
+Welsh. Re-running with English forced fixed it. Motivated language control +
+the standing manual-override principle.
+
+**Done:**
+- **Language control** — PWA *Audio language* selector (defaults to English so
+  auto-detect can't silently mis-pick); API already accepted `language`.
+- **Manual speaker editor** — `POST /v1/results/{id}/relabel` (one final speaker
+  label per segment; re-renders + persists .txt/.json). PWA "✎ Edit speakers":
+  rename a speaker everywhere, reassign an individual turn. The always-available
+  override for imperfect auto-labeling. Verified live (relabeled a real transcript
+  to 141 Therapist / 107 Lucy turns).
+- **Output language (phase 1)** — `task=transcribe|translate` through
+  API→pipeline→ASR. Whisper only outputs source-language or English, so the PWA
+  *Output* selector offers exactly that, force-locked. Speaches routes translate
+  to `/v1/audio/translations`. Verified live: synthetic Spanish clip →
+  transcribe=Spanish, translate=English. Arbitrary target languages are **phase
+  2** (needs a local translation model — NLLB/M2M-100).
+- **SW deploy fix** — service worker fetches shell assets with `cache:"no-store"`
+  (v4), so redeploys aren't masked by a stale HTTP-cached `app.js`.
+
+Test suite **68 passing** (+15 over Track B: relabel, task routing/validation).
+A browser smoke test caught a real `currentJobId` ReferenceError that would have
+broken every render.
+
+**Design principle recorded:** automation is assisted, not absolute — every
+auto-labeling/detection feature keeps a manual override (see the manual-fallback
+memory).
+
+**Deferred / on deck:** Track B live-enable (needs an operator therapist clip),
+Infra I (GPU diarization), output-language phase 2 (translation model), Track C.
+
