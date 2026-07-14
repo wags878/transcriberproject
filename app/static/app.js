@@ -1,6 +1,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const TOKKEY = "transcribe_token";
+const OIDC_TOKEN_KEY = "transcribe_oidc_tokens";
+const OIDC_FLOW_KEY = "transcribe_oidc_flow";
 const HISTKEY = "transcribe_history";
 
 const SAMPLES = [
@@ -11,19 +13,137 @@ const SAMPLES = [
 ];
 
 let blob = null, blobName = "", blobUrl = null;
+let authConfig = { mode: "static", oidc: { enabled: false } };
+let oidcMetadata = null;
+let oidcTokens = null;
 
 /* ---------- helpers ---------- */
-function token() { return ($("token").value || "").trim(); }
+function token() { return (oidcTokens && oidcTokens.access_token) || ($("token").value || "").trim(); }
 function authHeaders() { return { "Authorization": "Bearer " + token() }; }
 function fmtTime(s) { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60);
   return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); }
 function speakerLabel(raw) { return raw === "SPEAKER_??" ? "?" : raw; }
 
+/* ---------- authentication ---------- */
+function base64Url(bytes) {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function randomUrlSafe(size = 32) { const bytes = new Uint8Array(size); crypto.getRandomValues(bytes); return base64Url(bytes); }
+function redirectUri() { return location.origin + "/"; }
+function loadOidcTokens() {
+  try { return JSON.parse(sessionStorage.getItem(OIDC_TOKEN_KEY) || "null"); } catch { return null; }
+}
+function saveOidcTokens(value) {
+  oidcTokens = value;
+  if (value) sessionStorage.setItem(OIDC_TOKEN_KEY, JSON.stringify(value));
+  else sessionStorage.removeItem(OIDC_TOKEN_KEY);
+  renderAuth(); refreshGo();
+}
+async function metadata() {
+  if (oidcMetadata) return oidcMetadata;
+  const r = await fetch(authConfig.oidc.issuer + "/.well-known/openid-configuration", { cache: "no-store" });
+  if (!r.ok) throw new Error("Could not load sign-in provider configuration.");
+  oidcMetadata = await r.json();
+  if ((oidcMetadata.issuer || "").replace(/\/$/, "") !== authConfig.oidc.issuer.replace(/\/$/, ""))
+    throw new Error("Sign-in provider returned an unexpected issuer.");
+  return oidcMetadata;
+}
+async function signIn() {
+  try {
+    const m = await metadata();
+    const verifier = randomUrlSafe(64), state = randomUrlSafe(32);
+    const challenge = base64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+    sessionStorage.setItem(OIDC_FLOW_KEY, JSON.stringify({ verifier, state }));
+    const q = new URLSearchParams({ response_type: "code", client_id: authConfig.oidc.client_id,
+      redirect_uri: redirectUri(), scope: authConfig.oidc.scopes.join(" "), state,
+      code_challenge: challenge, code_challenge_method: "S256" });
+    location.assign(m.authorization_endpoint + "?" + q.toString());
+  } catch (e) { setErr(e.message); }
+}
+async function handleSignInCallback() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("code") && !q.has("error")) return;
+  history.replaceState({}, document.title, location.pathname);
+  if (q.has("error")) throw new Error("Sign-in failed: " + (q.get("error_description") || q.get("error")));
+  let flow = null;
+  try { flow = JSON.parse(sessionStorage.getItem(OIDC_FLOW_KEY) || "null"); } catch { /* handled below */ }
+  sessionStorage.removeItem(OIDC_FLOW_KEY);
+  if (!flow || q.get("state") !== flow.state) throw new Error("Sign-in response state did not match.");
+  const m = await metadata();
+  const body = new URLSearchParams({ grant_type: "authorization_code", client_id: authConfig.oidc.client_id,
+    code: q.get("code"), redirect_uri: redirectUri(), code_verifier: flow.verifier });
+  const r = await fetch(m.token_endpoint, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  if (!r.ok) throw new Error("The sign-in code could not be exchanged.");
+  const result = await r.json();
+  result.obtained_at = Math.floor(Date.now() / 1000);
+  saveOidcTokens(result);
+}
+async function refreshOidcToken() {
+  if (!oidcTokens || !oidcTokens.refresh_token) return false;
+  const m = await metadata();
+  const body = new URLSearchParams({ grant_type: "refresh_token", client_id: authConfig.oidc.client_id,
+    refresh_token: oidcTokens.refresh_token });
+  const r = await fetch(m.token_endpoint, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  if (!r.ok) { saveOidcTokens(null); return false; }
+  const next = await r.json();
+  saveOidcTokens({ ...oidcTokens, ...next, obtained_at: Math.floor(Date.now() / 1000) });
+  return true;
+}
+function oidcTokenExpiring() {
+  return oidcTokens && oidcTokens.expires_in && Date.now() / 1000 > oidcTokens.obtained_at + oidcTokens.expires_in - 60;
+}
+async function authorizedFetch(url, options = {}) {
+  if (oidcTokenExpiring()) await refreshOidcToken();
+  options.headers = { ...(options.headers || {}), ...authHeaders() };
+  let r = await fetch(url, options);
+  if (r.status === 401 && oidcTokens && await refreshOidcToken()) {
+    options.headers = { ...(options.headers || {}), ...authHeaders() };
+    r = await fetch(url, options);
+  }
+  return r;
+}
+async function signOut() {
+  saveOidcTokens(null);
+  sessionStorage.removeItem(TOKKEY);
+  $("token").value = "";
+  $("auth-user").textContent = "Not signed in";
+}
+async function renderAuth() {
+  const oidcEnabled = !!authConfig.oidc.enabled;
+  $("oidc-auth").hidden = !oidcEnabled;
+  $("legacy-auth").hidden = authConfig.mode === "oidc";
+  $("legacy-token-label").textContent = authConfig.mode === "hybrid" ? "Emergency API token" : "API token";
+  $("sign-in").hidden = !!oidcTokens;
+  $("sign-out").hidden = !oidcTokens;
+  if (!oidcTokens) { $("auth-user").textContent = "Not signed in"; return; }
+  try {
+    const r = await authorizedFetch("/v1/auth/me");
+    const me = r.ok ? await r.json() : null;
+    $("auth-user").textContent = (me && (me.email || me.subject)) || "Signed in";
+  } catch { $("auth-user").textContent = "Signed in"; }
+}
+
 /* ---------- init ---------- */
-(function init() {
-  $("token").value = localStorage.getItem(TOKKEY) || "";
+(async function init() {
+  // Migrate the original persistent token once, then remove it from localStorage.
+  const oldToken = localStorage.getItem(TOKKEY) || "";
+  if (oldToken && !sessionStorage.getItem(TOKKEY)) sessionStorage.setItem(TOKKEY, oldToken);
+  localStorage.removeItem(TOKKEY);
+  $("token").value = sessionStorage.getItem(TOKKEY) || "";
+  oidcTokens = loadOidcTokens();
   $("host-label").textContent = location.host;
-  $("token").addEventListener("input", () => { localStorage.setItem(TOKKEY, token()); refreshGo(); });
+  $("token").addEventListener("input", () => { sessionStorage.setItem(TOKKEY, ($("token").value || "").trim()); refreshGo(); });
+  $("sign-in").addEventListener("click", signIn);
+  $("sign-out").addEventListener("click", signOut);
+
+  try {
+    const configResponse = await fetch("/v1/auth/config", { cache: "no-store" });
+    if (!configResponse.ok) throw new Error("Could not load authentication settings.");
+    authConfig = await configResponse.json();
+    if (authConfig.oidc.enabled) await handleSignInCallback();
+    await renderAuth();
+  } catch (e) { setErr(e.message); }
 
   // sample chips
   for (const s of SAMPLES) {
@@ -156,13 +276,13 @@ async function transcribe() {
     // Output: "transcribe" (same as audio) or "translate" (force English).
     if ($("task").value) fd.append("task", $("task").value);
 
-    const r = await fetch("/v1/transcribe", { method: "POST", headers: authHeaders(), body: fd });
-    if (r.status === 401) throw new Error("401 Unauthorized — check your API token (⚙ Settings).");
+    const r = await authorizedFetch("/v1/transcribe", { method: "POST", body: fd });
+    if (r.status === 401) throw new Error("Your sign-in or API token is no longer valid. Open Settings to sign in again.");
     if (!r.ok) throw new Error("Server error " + r.status + ": " + (await r.text()));
     const meta = await r.json();
     const wall = (performance.now() - t0) / 1000;
 
-    const jr = await fetch(meta.transcript_json_url, { headers: authHeaders() });
+    const jr = await authorizedFetch(meta.transcript_json_url);
     const doc = await jr.json();
 
     currentUrls = { txt: meta.transcript_txt_url, json: meta.transcript_json_url };
@@ -359,9 +479,9 @@ function toggleEdit() { editMode = !editMode; renderView(); }
 async function saveLabels() {
   if (!currentJobId) { setErr("No job to save (open a transcript first)."); return; }
   try {
-    const r = await fetch(`/v1/results/${currentJobId}/relabel`, {
+    const r = await authorizedFetch(`/v1/results/${currentJobId}/relabel`, {
       method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ speakers: editLabels }),
     });
     if (!r.ok) throw new Error("Save failed " + r.status + ": " + (await r.text()));
@@ -395,7 +515,7 @@ function copyTranscript() {
 function flash(btn, msg) { const o = btn.textContent; btn.textContent = msg; setTimeout(() => btn.textContent = o, 1200); }
 async function download(url, name) {
   if (!url) return;
-  const r = await fetch(url, { headers: authHeaders() });
+  const r = await authorizedFetch(url);
   const b = await r.blob(); const u = URL.createObjectURL(b);
   const a = document.createElement("a"); a.href = u; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(u), 4000);
@@ -429,7 +549,7 @@ function renderHistory() {
 async function openHistory(it) {
   setErr("");
   try {
-    const jr = await fetch(it.json, { headers: authHeaders() });
+    const jr = await authorizedFetch(it.json);
     if (!jr.ok) throw new Error("Transcript no longer available (retention).");
     const doc = await jr.json();
     currentUrls = { txt: it.txt, json: it.json };

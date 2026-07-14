@@ -11,6 +11,18 @@ class Settings(BaseSettings):
 
     api_token: str = Field(default="", alias="API_TOKEN")
 
+    # Authentication migration bridge. "static" preserves the original shared
+    # API token, "hybrid" accepts either that token or an OIDC access token, and
+    # "oidc" disables the shared token entirely.
+    auth_mode: str = Field(default="static", alias="AUTH_MODE")
+    oidc_issuer: str = Field(default="", alias="OIDC_ISSUER")
+    oidc_client_id: str = Field(default="", alias="OIDC_CLIENT_ID")
+    oidc_browser_scopes: str = Field(
+        default="openid profile email", alias="OIDC_BROWSER_SCOPES"
+    )
+    oidc_required_scopes: str = Field(default="", alias="OIDC_REQUIRED_SCOPES")
+    oidc_jwks_cache_seconds: int = Field(default=3600, alias="OIDC_JWKS_CACHE_SECONDS")
+
     whisper_model: str = Field(default="medium", alias="WHISPER_MODEL")
     whisperx_compute_type: str = Field(default="int8", alias="WHISPERX_COMPUTE_TYPE")
     whisperx_device: str = Field(default="cpu", alias="WHISPERX_DEVICE")

@@ -24,7 +24,9 @@ def test_txt_paragraph_merge(client, auth_headers, fake_audio) -> None:
     txt = client.get(body["transcript_txt_url"], headers=auth_headers)
     assert txt.status_code == 200
 
-    paragraphs = txt.text.rstrip("\n").split("\n\n")
+    # TestClient uses the platform newline when decoding FileResponse on
+    # Windows; normalize so this assertion remains cross-platform.
+    paragraphs = txt.text.replace("\r\n", "\n").rstrip("\n").split("\n\n")
     assert len(paragraphs) == 2, txt.text
     assert paragraphs[0] == "[00:00] SPEAKER_00: Hello there. How are you today?"
     assert paragraphs[1] == "[00:03] SPEAKER_01: I am well, thank you."

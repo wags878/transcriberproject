@@ -44,5 +44,8 @@ python-dateutil==2.9.0
 # --- Phase 3 additions ---
 # OpenAI-compat ASR client (Speaches, whisper.cpp server). Async-friendly HTTP.
 httpx==0.27.2
+# Standards-based OIDC access-token verification. The crypto extra supplies
+# RSA/JWK support without coupling the API to any identity-provider SDK.
+PyJWT[crypto]==2.10.1
 # Async test support for the new ASR client/router unit tests.
 pytest-asyncio==0.24.0

@@ -32,3 +32,24 @@ def test_results_endpoint_requires_auth(client) -> None:
     # 401 must come before 404; auth is the gate.
     assert client.get("/v1/results/some-uuid/transcript.txt").status_code == 401
     assert client.get("/v1/results/some-uuid/transcript.json").status_code == 401
+
+
+def test_auth_config_is_public_and_defaults_to_static(client) -> None:
+    r = client.get("/v1/auth/config")
+    assert r.status_code == 200
+    assert r.json() == {
+        "mode": "static",
+        "oidc": {"enabled": False, "issuer": "", "client_id": "", "scopes": []},
+    }
+
+
+def test_auth_me_describes_static_principal(client, auth_headers) -> None:
+    r = client.get("/v1/auth/me", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json() == {
+        "subject": "local-admin",
+        "email": None,
+        "scopes": [],
+        "groups": [],
+        "method": "static",
+    }

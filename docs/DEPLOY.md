@@ -17,7 +17,7 @@ end-to-end if the operator rebuilds the VM.
 cd /home/transcriber/Github/transcriberproject
 cp .env.example .env
 
-# Generate a strong API token and edit it into .env:
+# Keep AUTH_MODE=static for initial bring-up. Generate a strong API token:
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 # (set API_TOKEN= to that value)
 
@@ -25,6 +25,16 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 # Then tag your iPhone / laptop as tag:transcribe-client. Phase 4 adds the
 # ACL JSON; for now any tailnet device can reach :8000.
 ```
+
+## Optional: enable the OIDC authentication bridge
+
+The app can use Cognito without moving the API or GPU stack to AWS. Provision
+the public PWA client first, then set `AUTH_MODE=hybrid`, `OIDC_ISSUER`, and
+`OIDC_CLIENT_ID` in `.env` and rebuild/restart `transcribe-svc`. Hybrid mode
+keeps the original API token as an emergency master key. After browser login,
+refresh, and API access have been verified, change to `AUTH_MODE=oidc` to
+disable that key. Exact Cognito callback URLs, scopes, and verification steps
+are in `docs/AUTH.md`.
 
 ## First build and start
 
@@ -234,8 +244,9 @@ in the `asr_backend` field on each transcription response.
 
 `docker-compose.gpu.yml` publishes the service on the host loopback
 (`127.0.0.1:8000`), so the installable **PWA** is at <http://localhost:8000> on
-the Alienware itself. Paste the API token in ⚙ Settings; drag in an audio file,
-record, or click a committed sample (`/samples`). Over the tailnet the same app
+the Alienware itself. In static mode, paste the API token in Settings; in
+hybrid/OIDC mode, use **Sign in**. Then drag in an audio file, record, or click
+a committed sample (`/samples`). Over the tailnet the same app
 is at `http://transcribe-svc.<tailnet>.ts.net:8000` — note that's **http on
 :8000**, not https; mic recording + "Add to Home Screen" require a secure
 context, so for full mobile use add `tailscale serve` (HTTPS) later. `localhost`

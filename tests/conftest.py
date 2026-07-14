@@ -9,6 +9,7 @@ import pytest
 
 # Set test-mode env vars BEFORE importing the app so settings see them.
 os.environ.setdefault("API_TOKEN", "test-token-not-for-prod")
+os.environ["AUTH_MODE"] = "static"
 _TMP_DATA = Path(tempfile.mkdtemp(prefix="transcribe-svc-tests-"))
 os.environ["DATA_DIR"] = str(_TMP_DATA)
 os.environ["HF_HOME"] = str(_TMP_DATA / "models" / "hf")

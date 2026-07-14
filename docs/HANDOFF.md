@@ -6,12 +6,12 @@
 
 ## TL;DR
 
-Everything is now **merged to `main`** (merge commit `a35939c`) and deployed on
-the Alienware (Windows 11 + WSL2 + Docker Desktop + **RTX 5090**). The GPU stack
-is a **four-container** compose, served over **HTTPS on the tailnet**. A PWA web
-client is live with language/output/speaker-edit controls. **72 tests pass.**
-The next feature is **Track B live-enable** (needs one operator reference clip);
-see "Next".
+The GPU stack remains deployed on the Alienware and served over HTTPS on the
+tailnet. **Codex implementation note (2026-07-13):** this worktree now adds a
+provider-neutral OIDC/Cognito bridge with static, hybrid, and OIDC-only modes.
+**85 tests pass** and the static-mode PWA browser smoke test passes. Cognito has
+not been provisioned and these worktree changes have not been deployed; follow
+`docs/AUTH.md`, start in hybrid mode, and retain the current `.env` backup.
 
 This is a **patient-owned** recorder for **any** patient↔provider interaction
 (doctor, therapist, dentist, coach, …) — "flipping the script" on doctor-facing
@@ -50,6 +50,9 @@ To bring up / verify from scratch: `README.md` Quick start + `docs/DEPLOY.md`.
   Welsh on an unfiltered intro), **Output** selector (*Same as audio* /
   *English translate*), and **✎ Edit speakers** (rename across transcript /
   reassign a turn; persists via `POST /v1/results/{id}/relabel`).
+- **OIDC auth bridge (Codex, pending deployment)** — standard Authorization Code
+  + PKCE in the PWA; signed JWT/JWKS verification in the API; static/hybrid/oidc
+  rollout modes. No Cognito SDK and no dependency on AWS hosting.
 - **Output language phase 1** — `task=transcribe|translate` (Whisper does
   source-lang or English only; arbitrary targets = phase 2, not built).
 - **Track B (voice enrollment)** — built, **off by default** (`ENABLE_ROLE_LABELS=0`).
@@ -76,7 +79,9 @@ functional — the same path Phase 1/2 ran on that box.
 `segmentation-3.0`), `TS_AUTHKEY` (reusable, `tag:transcribe-svc`),
 `DIARIZATION_MODEL=pyannote/speaker-diarization-3.1`. `.env.example` documents all
 keys. On the current Alienware host these are already set. Current API token is in
-the operator's `.env` (single shared bearer; rotate freely).
+the operator's `.env` (the static/hybrid emergency bearer; rotate freely).
+OIDC adds `AUTH_MODE`, `OIDC_ISSUER`, and `OIDC_CLIENT_ID`; none are secrets.
+Keep `API_TOKEN` secret while hybrid mode is enabled.
 
 ## Next task → ML Track B live-enable (needs one operator clip)
 
@@ -101,7 +106,8 @@ Track B code is done and off by default. To turn it on:
 - **Track C** — Whisper LoRA fine-tuning scaffold (smoke-run on synthetic; real
   gains wait for consented data). Re-measure any change with Track A's harness.
 - **Storage / multi-user** — pluggable `StorageBackend`, per-user namespacing,
-  cloud PHI/BAA caveat — design-doc first, gated on multi-user auth (Phase 4).
+  cloud PHI/BAA caveat — authentication now exposes a stable subject, but
+  storage remains shared and must be namespaced before third-party users.
 - **Friendly `415`** on undecodable uploads (currently generic `500`).
 - **Doc governance (anti-drift)** — a `GOVERNANCE.md` standing rule + PR-template
   checklist + a `/doc-review` pre-merge gate. Docs are the source of truth.

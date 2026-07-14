@@ -5,13 +5,42 @@ Source-of-truth: `PROJECT_PLAN.md` §4. This file is the operator-facing referen
 
 Base URL inside the tailnet (Phase 1): `http://<vm-tailnet-ip>:8000`
 
-All authenticated routes require:
+Authenticated routes accept an OAuth/OIDC access token, the original static
+token, or both according to `AUTH_MODE`:
 
 ```
-Authorization: Bearer <API_TOKEN>
+Authorization: Bearer <access-token>
 ```
+
+- `AUTH_MODE=static`: `API_TOKEN` only (backward-compatible default).
+- `AUTH_MODE=hybrid`: OIDC access tokens or `API_TOKEN` during migration.
+- `AUTH_MODE=oidc`: OIDC access tokens only; `API_TOKEN` is disabled.
+
+Successful authentication produces a provider-neutral subject internally. The
+static token maps to `local-admin`; OIDC maps to the signed token's `sub`.
+Storage is not per-user yet, so authentication does not currently isolate one
+user's transcripts from another authenticated user. See `docs/AUTH.md`.
 
 `/v1/health` is intentionally **unauthenticated** so monitoring and the Docker `HEALTHCHECK` work without a token.
+
+## `GET /v1/auth/config`
+
+No auth. Returns only non-secret PWA configuration: auth mode, OIDC issuer,
+public client ID, and browser scopes. It never returns `API_TOKEN`.
+
+## `GET /v1/auth/me`
+
+Auth: required. Returns the normalized current identity:
+
+```json
+{
+  "subject": "user-pool-sub-or-local-admin",
+  "email": "person@example.com",
+  "scopes": ["openid"],
+  "groups": [],
+  "method": "oidc"
+}
+```
 
 ---
 
@@ -67,7 +96,8 @@ of the transcript text (`en` whenever `task=translate`).
 | Status | Meaning |
 |---|---|
 | 400 | Missing `audio` field, or `task` not in {`transcribe`,`translate`} |
-| 401 | Missing / invalid bearer token |
+| 401 | Missing, invalid, expired, wrong-issuer, or wrong-client bearer token |
+| 403 | Valid OIDC token missing a configured required scope |
 | 413 | Upload exceeds `MAX_UPLOAD_MB` |
 | 500 | Pipeline failure (see container logs) |
 
@@ -239,10 +269,12 @@ An undecodable/corrupt file currently surfaces as a generic `500`.
 ## Web client (PWA)
 
 An installable single-page client is served from the same origin at `/`
-(`app/static/`), with synthetic demo clips at `/samples`. It holds the bearer
-token in `localStorage` and calls the same `/v1/*` endpoints — the API stays
-auth-gated. Reach it at `http://localhost:8000` (host loopback, published by the
-GPU compose) or over the tailnet. See `docs/DEPLOY.md`.
+(`app/static/`), with synthetic demo clips at `/samples`. In hybrid/OIDC mode it
+uses OIDC Authorization Code + PKCE and refreshes access tokens when possible.
+OIDC tokens and the temporary static fallback are session-scoped; the client
+migrates and deletes the older persistent `localStorage` token. Reach it at
+`http://localhost:8000` or over the tailnet. See `docs/AUTH.md` and
+`docs/DEPLOY.md`.
 
 Client features: an **Audio language** selector (defaults to English so an
 unfiltered intro can't silently mis-detect the language — set it to *Auto-detect*

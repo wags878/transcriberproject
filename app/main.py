@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import json
 
 from app import storage
-from app.auth import bearer_auth
+from app.auth import AuthPrincipal, bearer_auth, validate_auth_config
 from app.config import settings
 from app.pipeline import pipeline, render_json, render_txt
 from app.relabel import apply_speaker_labels
@@ -32,6 +32,7 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    validate_auth_config()
     storage.ensure_dirs()
     removed = storage.cleanup_old_files(settings.retain_days)
     log.info(
@@ -70,6 +71,34 @@ async def health() -> HealthResponse:
         compute_type=settings.whisperx_compute_type,
         gpu=settings.whisperx_device == "cuda",
     )
+
+
+@app.get("/v1/auth/config")
+async def auth_config() -> dict[str, object]:
+    """Public, non-secret browser configuration for the PWA login flow."""
+    mode = settings.auth_mode.strip().lower()
+    oidc_enabled = mode in {"hybrid", "oidc"}
+    return {
+        "mode": mode,
+        "oidc": {
+            "enabled": oidc_enabled,
+            "issuer": settings.oidc_issuer.rstrip("/") if oidc_enabled else "",
+            "client_id": settings.oidc_client_id if oidc_enabled else "",
+            "scopes": settings.oidc_browser_scopes.split() if oidc_enabled else [],
+        },
+    }
+
+
+@app.get("/v1/auth/me")
+async def auth_me(principal: AuthPrincipal = Depends(bearer_auth)) -> dict[str, object]:
+    """Return the provider-neutral identity associated with the access token."""
+    return {
+        "subject": principal.subject,
+        "email": principal.email,
+        "scopes": sorted(principal.scopes),
+        "groups": list(principal.groups),
+        "method": principal.method,
+    }
 
 
 @app.post(
@@ -218,8 +247,8 @@ async def _http_exc(_, exc: HTTPException) -> JSONResponse:  # type: ignore[over
 # Served same-origin (no CORS) so it works via both the published localhost port
 # and the tailnet URL. Mounted LAST so every /v1 API route above takes
 # precedence; anything else (/, /icon.svg, /manifest.webmanifest, /sw.js) is
-# served from app/static. The client holds the bearer token in localStorage and
-# sends it on each request — the API itself stays auth-gated.
+# served from app/static. The client uses OIDC Authorization Code + PKCE when
+# configured, with the original shared token available during migration.
 import mimetypes
 
 from fastapi.staticfiles import StaticFiles

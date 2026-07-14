@@ -2,7 +2,7 @@
 // immediately; falls back to cache only when offline. This avoids the
 // stale-shell trap that a cache-first worker causes during active development,
 // while keeping the app installable + offline-capable.
-const CACHE = "transcribe-shell-v4";
+const CACHE = "transcribe-shell-v5";
 const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (e) => {

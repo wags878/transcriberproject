@@ -507,3 +507,43 @@ in-process CPU pyannote on any sidecar failure; 4 unit tests cover it.
 phase 2 (translation model), Track C. Both GPU services (Speaches + diarize)
 share the one 5090; VRAM headroom is fine for large-v3 + pyannote.
 
+---
+
+## 2026-07-13 — Provider-neutral OIDC authentication bridge (Codex; built, not deployed)
+
+**Codex implementation note for Claude:** this change intentionally preserves
+the existing documentation structure and keeps Cognito behind a standard OIDC
+boundary. AWS identity can be demonstrated while the API/GPU remain local, and
+another conforming provider can replace it later.
+
+**Done:**
+- Added `AUTH_MODE=static|hybrid|oidc`. Static remains the default; hybrid keeps
+  `API_TOKEN` as an emergency migration key; OIDC-only disables it.
+- Added provider-neutral `AuthPrincipal` (`subject`, optional email, scopes,
+  groups, method). The legacy key maps to `local-admin` so later ownership work
+  can depend on one identity shape.
+- Added RS256 JWT verification using provider discovery/JWKS, bounded caching,
+  unknown-key rotation refresh, issuer/expiry/issued-at/application checks,
+  Cognito access-token rules, ID-token rejection, and optional required scopes.
+- Added public `GET /v1/auth/config` and protected `GET /v1/auth/me`.
+- Replaced the PWA's normal persistent token flow with standard Authorization
+  Code + PKCE login when configured. Access/refresh tokens and the hybrid
+  fallback are session-scoped; an old `localStorage` token is migrated and
+  deleted. Service-worker shell cache bumped to v5.
+- Added `docs/AUTH.md` with exact Cognito setup and rollout/rollback steps.
+- Verification: **85 tests pass**, Python syntax and JavaScript syntax pass,
+  `git diff --check` passes, and a real local-browser static-mode smoke test
+  confirmed the settings UI, token entry, sample load, and enabled action with
+  no console errors.
+
+**Not done / deliberately deferred:**
+- No Cognito user pool or AWS resources were created; no real OIDC browser flow
+  has been exercised yet. The operator must provide the AWS identity boundary.
+- Not deployed to the Alienware stack yet.
+- Storage is still global. Authentication identifies users but does not yet
+  enforce transcript ownership; this is not multi-user-ready.
+- Local sign-out clears app tokens but does not yet force provider-wide logout.
+
+**Next:** provision a Cognito development pool/client, deploy in `hybrid` mode,
+complete the synthetic rollout checklist in `docs/AUTH.md`, then decide whether
+to proceed to per-user storage ownership or return to Track B live-enable.

@@ -8,7 +8,11 @@ A privately-hosted HTTP service that accepts audio recordings, transcribes them 
 
 **Picking up cold?** Start with **`docs/HANDOFF.md`** — current state, how to run, and the next task.
 
-All work is **merged to `main`** and **deployed on GPU**. Runs as a **four-container** stack on the Alienware host (Windows 11 + WSL2 + Docker Desktop, RTX 5090): a Tailscale sidecar, **Speaches** (`faster-whisper-large-v3` ASR on GPU), a **`diarize-svc`** pyannote diarization sidecar (GPU), and the FastAPI orchestrator. ASR and diarization are each health-checked with **per-request CPU fallback**, so a GPU/sidecar outage degrades speed but never fails a job. Served over **HTTPS on the tailnet** (`tailscale serve`, valid Let's Encrypt cert). Throughput ~8.7–10.9× realtime. See `docs/STATUS.md` for the running phase log and `docs/BLOCKERS.md` for open issues.
+The GPU transcription stack is deployed on the Alienware host (Windows 11 +
+Docker Desktop, RTX 5090). The current worktree also contains a **Codex-built,
+provider-neutral OIDC bridge** with static/hybrid/OIDC modes; it is tested but
+has not yet been configured against a real Cognito user pool or deployed. See
+`docs/AUTH.md` for that rollout and `docs/STATUS.md` for the running phase log.
 
 The PWA client adds an **Audio language** selector (default English), an **Output** selector (*Same as audio* / *English translate*), and post-transcription **speaker editing** (rename / reassign). This is a **patient-owned** recorder for any patient↔provider interaction, not just therapy — role labels are generic.
 
@@ -17,7 +21,8 @@ The PWA client adds an **Audio language** selector (default English), an **Outpu
 1. Set up `.env`:
    ```sh
    cp .env.example .env
-   # set: API_TOKEN (python3 -c "import secrets; print(secrets.token_urlsafe(32))"),
+   # leave AUTH_MODE=static initially; set API_TOKEN
+   # (python3 -c "import secrets; print(secrets.token_urlsafe(32))"),
    #      HF_TOKEN (pyannote conditions accepted), TS_AUTHKEY (reusable, tag:transcribe-svc),
    #      DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
    ```
@@ -25,7 +30,9 @@ The PWA client adds an **Audio language** selector (default English), an **Outpu
    ```sh
    docker compose -f docker-compose.gpu.yml up -d --build
    ```
-3. Open the **web client** at <http://localhost:8000> (host loopback), or over the tailnet at **`https://transcribe-svc.<your-tailnet>.ts.net`** (HTTPS, no port — required for mic recording + PWA install on iPhone; enable once with `docker compose -f docker-compose.gpu.yml exec tailscale tailscale serve --bg 8000`). Paste your token in ⚙ Settings, then drop in an audio file / record / click a sample.
+3. Open the **web client** at <http://localhost:8000> or the tailnet HTTPS URL.
+   In static mode, paste the API token in Settings. In hybrid/OIDC mode, use
+   **Sign in**; see `docs/AUTH.md` before changing modes.
 4. Or hit the API directly:
    ```sh
    TOKEN=$(grep ^API_TOKEN .env | cut -d= -f2-)
@@ -70,6 +77,7 @@ transcribe-svc/
 └── docs/
     ├── HARDWARE.md           host facts
     ├── BLOCKERS.md           open issues
+    ├── AUTH.md               OIDC/Cognito bridge and rollout
     ├── STATUS.md             phase-by-phase log
     ├── API.md                contract reference
     ├── DEPLOY.md             bring-up (VM + Alienware GPU)

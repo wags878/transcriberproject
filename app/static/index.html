@@ -116,10 +116,21 @@
 <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Settings">
   <div class="drawer-head"><h3>Settings</h3><button class="icon-btn" id="drawer-close">✕</button></div>
-  <label class="drawer-field">API token
-    <input type="password" id="token" placeholder="paste your API_TOKEN" autocomplete="off" />
-  </label>
-  <p class="hint">Stored only in this browser (localStorage). Sent as <code>Authorization: Bearer …</code> to this host.</p>
+  <section id="oidc-auth" hidden>
+    <div class="drawer-field">
+      <span>Account</span>
+      <strong id="auth-user">Not signed in</strong>
+    </div>
+    <button class="btn primary drawer-action" id="sign-in">Sign in</button>
+    <button class="btn ghost drawer-action" id="sign-out" hidden>Sign out</button>
+    <p class="hint">Secure browser sign-in uses OpenID Connect with PKCE. Tokens are kept only for this browser session.</p>
+  </section>
+  <section id="legacy-auth">
+    <label class="drawer-field"><span id="legacy-token-label">API token</span>
+      <input type="password" id="token" placeholder="paste your API_TOKEN" autocomplete="off" />
+    </label>
+    <p class="hint" id="legacy-token-hint">Temporary migration fallback. Stored only for this browser session.</p>
+  </section>
   <div class="drawer-field">
     <span>Host</span><code id="host-label"></code>
   </div>
