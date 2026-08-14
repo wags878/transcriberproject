@@ -4,9 +4,49 @@ Records what the service is actually running on. Fill in the *Target deployment*
 
 ## Status
 
-> **Spec alignment note.** Phase 0 §6 acceptance item (`lscpu | grep -i avx512` returns flags) is now **fulfilled** as of 2026-05-01. The host is still smaller than the spec's 128 GB / 12-core target, but the SIMD path the spec depends on is in place. See `docs/BLOCKERS.md` entry **B-001** for history.
+> **Read the host sections in order.** The active deployment is the **Alienware
+> RTX 5090** (GPU stack). The Proxmox VM section that follows it is the retained
+> CPU fallback and is no longer where the service runs — several of its
+> conclusions (AVX-512 tuning, thread counts, whisper model sizing) apply only to
+> that CPU path.
 
-## Current host (measured 2026-05-01, after Proxmox VM reconfig)
+> **Spec alignment note (CPU host only).** Phase 0 §6 acceptance item (`lscpu | grep -i avx512` returns flags) is now **fulfilled** as of 2026-05-01 on the Proxmox VM. That host is still smaller than the spec's 128 GB / 12-core target, but the SIMD path the spec depends on is in place. See `docs/BLOCKERS.md` entry **B-001** for history. Moot for the GPU stack, which does not use the AVX-512 int8 path for ASR.
+
+## Current host — Alienware (home of record since 2026-07-12; re-verified 2026-08-14)
+
+The GPU stack runs here. The Proxmox VM below is retained as the documented CPU
+fallback, not the active deployment.
+
+| Field | Value |
+|---|---|
+| Repo path | `C:\Users\<user>\Github\transcriberproject` |
+| OS | Windows 11 Pro 10.0.26200 |
+| CPU | 24 logical processors available to Docker |
+| RAM available to Docker | **31.07 GiB** |
+| GPU | **NVIDIA GeForce RTX 5090 Laptop GPU, 24463 MiB** (Blackwell, sm_120) |
+| NVIDIA driver | 592.02 (CUDA 13.1) — spec minimum is v566+ |
+| Docker Desktop | 4.84.0 (engine 29.6.2), WSL2 backend, `nvidia` runtime present |
+| Tailscale node | `transcribe-svc-1` / 100.x.y.z, `tag:transcribe-svc` |
+| Tailnet | `example-tailnet.ts.net` (HTTPS certs available) |
+| Disk free (C:) | 1.4 TB |
+
+Image sizes on this host (2026-08-14): `transcribe-svc:cpu` 14 GB,
+`speaches:latest-cuda` 8.6 GB, `transcribe-svc-diarize:cuda` 4.4 GB. Plus ~2.9 GB
+of Whisper weights in `transcribe-svc_speaches_models`. Budget ~30 GB for a cold
+rebuild before build cache.
+
+**VRAM:** ~5.6 GiB resident with large-v3 + pyannote both loaded, against 24 GiB —
+ample headroom for the two GPU services to share the one card. Speaches evicts its
+model after `ttl=300` (5 min idle) and reloads from local disk on the next
+request, so idle VRAM drops to near zero. That is expected and is *not* a CPU
+fallback.
+
+**This host does not match `PROJECT_PLAN.md` §2 at all** — that spec described a
+128 GB dual-Xeon CPU box with no GPU (B-001). It has been superseded in practice:
+the GPU path beats the spec's own 3–8× realtime target. §2 should be rewritten
+around this host next time it is revised.
+
+## Previous host — Proxmox VM (measured 2026-05-01, after reconfig)
 
 | Field | Value |
 |---|---|
@@ -49,7 +89,41 @@ Records what the service is actually running on. Fill in the *Target deployment*
 | Run C — medium / conc=2 (parallel ×2) | 2026-05-01 | 300 s ×2 in parallel | Job 1: 1002 s wall / 976.5 s pipeline; Job 2: 753.7 s / 730.0 s | per-job 2.4–3.2× slower than realtime | Two simultaneous POSTs. Both returned 200 with valid bodies; no OOM. System-level throughput: 2 jobs in ~1002 s vs serialized 2×621.8 ≈ 1244 s → **~24% throughput gain**. Cost: per-job latency worsens 17–57%. Container peak 5.58 GiB combined; CPU peaked at ~1289% (~13 of 16 vCPUs — concurrency=2 is what actually exercises the new core count). |
 | Run D — large-v3 / conc=2 (parallel ×2) | 2026-05-01 | 300 s ×2 in parallel | Job 1: 1246 s wall / 1228.8 s pipeline; Job 2: 996.9 s / 982.2 s | per-job 3.2–4.1× slower than realtime | The spec's intended config validated end-to-end. Both POSTs returned 200, valid schema, 2 speakers diarized. No OOM. Container peak **6.60 GiB / 15.6 GiB (42%)**; CPU peaked ~1340% (~13 of 16 vCPUs). System throughput: 2 jobs in ~1246 s vs serialized 2×772 ≈ 1544 s → **~24% throughput gain** (same ratio as Run C). Per-job latency penalty (1.27–1.59×) is the cost of running them concurrently; this is fine for "drop files in, pick them up later" but not for "I uploaded one file and want it ASAP." |
 
-**Extrapolated to a real session (post-2026-05-01 reconfig):**
+### GPU stack — Alienware RTX 5090
+
+⚠️ **Different convention from the CPU table above.** These are *faster* than
+realtime, quoted as a realtime **factor** (`audio_seconds / wall_seconds`, higher
+is better). The CPU rows above quote "× slower than realtime" (lower is better).
+
+| Run | Date | Audio | Wall | Realtime factor | Notes |
+|---|---|---|---|---|---|
+| GPU diarization sidecar | 2026-07-13 | 88.8 s | 8.1 s | **~10.9×** | Infra I close-out. Was ~2.85× with CPU diarization. |
+| GPU diarization sidecar | 2026-07-13 | 834 s | 96.2 s | **~8.7×** | Longer clip — diarization dominates more, so the factor drops. |
+| Cold-rebuild verification | 2026-08-14 | 90.9 s | 8.3 s | **~10.9×** | `samples/friendly_conversation.mp3`, warm. `asr_backend: speaches@…`, `diarize_device: cuda`, 2 speakers, `en`, 15 segments. Reproduces the 2026-07-13 number exactly after a full rebuild. |
+| HTTPS path — **cold** (model evicted) | 2026-08-14 | 32.4 s | 35.3 s | **~0.9×** | `samples/quick_qa.mp3` over `https://transcribe-svc-1…`. **Still GPU** — `speaches@…` / `cuda` confirmed in the header. The whole gap is Speaches reloading large-v3 after `ttl=300` eviction. |
+| HTTPS path — **warm** (same clip, immediately after) | 2026-08-14 | 32.4 s | 3.1 s | **~10.3×** | Identical request, model resident. 11× faster than the cold run on the same code path. |
+
+**Measure warm, or you will misdiagnose the stack.** The cold/warm pair above is
+the same clip, same request, same GPU backends — 0.9× vs 10.3×. A single short
+clip submitted after ≥5 minutes idle spends most of its wall-clock reloading
+weights, which looks exactly like a CPU fallback and is not one. Distinguish them
+by the transcript header, never by wall-clock: cold-but-GPU still reports
+`speaches@…` / `cuda`, whereas a real fallback reports `local-whisperx` /
+`cpu-fallback`. Send one throwaway request to warm the model before timing
+anything.
+
+**Extrapolated to a real session (GPU stack):** a 60-minute recording finishes in
+roughly **6–7 minutes**. This clears `PROJECT_PLAN.md` §2's 10–20-minute / 3–8×
+target that the CPU host never reached, and turns "drop it in, pick it up later"
+into "wait for it."
+
+The first request after ≥5 minutes idle pays a few seconds of model reload
+(Speaches `ttl=300`), so a one-off short clip measures worse than these warm
+numbers. Measure warm, and always confirm `asr_backend` / `diarize_device` in the
+transcript header — a silent CPU fallback (B-005) is the single most likely reason
+a GPU-stack measurement looks like a CPU-stack one.
+
+**Extrapolated to a real session (post-2026-05-01 reconfig, CPU host):**
 
 | model | concurrency | per-job wall for 60-min audio | system throughput notes |
 |---|---|---|---|
@@ -73,4 +147,18 @@ Per PROJECT_PLAN.md §10: present in the operator's home server, **out of scope*
 
 ## NVIDIA GPU
 
-Per operator decision 2026-04-30 (PROJECT_PLAN.md §8 Q2): **skipped entirely**. Sub-phase 0a is dropped from the active plan. `Dockerfile.gpu` and `docker-compose.gpu.yml` are scaffolded for future use but not built or invoked by default.
+**Superseded 2026-07-12.** The 2026-04-30 decision (PROJECT_PLAN.md §8 Q2) to skip
+GPU entirely applied to the *old Tesla* in the home server (8 GB, no tensor cores)
+— that card is still not pursued. It does **not** apply to the current
+deployment: the project moved to the Alienware RTX 5090 and
+`docker-compose.gpu.yml` is now the primary, actively deployed configuration.
+
+Both GPU features remain **opt-in with CPU fallback**, so the CPU-only path in
+`docker-compose.yml` continues to work unchanged on any GPU-less host:
+
+- `ASR_BACKEND=router` → Speaches on GPU, falling back to in-process WhisperX.
+- `DIARIZE_BACKEND=remote` → `diarize-svc` on GPU, falling back to in-process
+  pyannote.
+
+Fallback is per-request and verified live (STATUS 2026-07-13), so a GPU or sidecar
+outage degrades speed but never fails a job.

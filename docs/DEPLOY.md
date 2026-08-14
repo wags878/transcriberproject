@@ -195,12 +195,30 @@ Common causes: driver too old (need v566+), WSL2 kernel out of date
 ### Tailscale prep (one-time, in the admin console)
 
 1. Confirm `tag:transcribe-svc` and `tag:transcribe-client` are in the ACL policy.
-2. Generate a **reusable, pre-authorized** auth key at
+2. **Delete any stale `transcribe-svc` node — and do it BEFORE first bring-up.**
+   MagicDNS names are claimed first-come *and are sticky*: if an offline node from
+   a previous deployment holds `transcribe-svc`, the new container silently
+   registers as `transcribe-svc-1` and **you cannot get the name back afterward**.
+   Verified on 2026-08-14 — deleting the stale node, restarting the container, a
+   full `down`/`up`, `tailscale set --hostname`, and an admin-console rename all
+   leave it as `-1`. The name is assigned at registration and persisted in the
+   `tailscale_state` volume; only wiping that volume re-registers, which demands a
+   known-**reusable** `TS_AUTHKEY` (every container gates on tailscale's health, so
+   a consumed single-use key strands the whole stack).
+
+   This is a one-way door. Check the machine list first:
+   ```sh
+   # after bring-up, confirm you got the name you wanted:
+   docker compose -f docker-compose.gpu.yml exec tailscale tailscale status | grep transcribe
+   ```
+   (Hit on 2026-08-14; the deployment now permanently answers to
+   `transcribe-svc-1`. See `docs/STATUS.md`.)
+3. Generate a **reusable, pre-authorized** auth key at
    [Settings → Keys](https://login.tailscale.com/admin/settings/keys):
    - "Reusable" checked
    - "Pre-approved" checked
    - Tag: `tag:transcribe-svc`
-3. Save the key; you'll paste it into `.env` next.
+4. Save the key; you'll paste it into `.env` next.
 
 ### Deploy
 
@@ -217,16 +235,61 @@ cp .env.example .env
 #   DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   (community-1 doesn't
 #                     load in pyannote.audio 3.1.1 — see B-004)
 
+### Pre-flight (run these BEFORE `up` — both failures are invisible at startup)
+
+Both of these pass a container healthcheck and then fail *inside* the first
+transcription, which is a much worse place to find them.
+
+```bash
+# 1. HF token + gated model access. A bad/absent token does NOT fail at boot:
+#    pipeline.transcribe() runs ASR and diarization under asyncio.gather with no
+#    return_exceptions, so a diarization load failure kills the whole request.
+HF=$(awk -F= '/^HF_TOKEN=/{print $2}' .env)
+for m in pyannote/speaker-diarization-3.1 \
+         pyannote/segmentation-3.0 \
+         pyannote/wespeaker-voxceleb-resnet34-LM; do
+  curl -s -o /dev/null -w "$m -> %{http_code}\n" \
+       -H "Authorization: Bearer $HF" "https://huggingface.co/api/models/$m"
+done
+# All three must be 200. A 403 = conditions page not accepted for that model.
+
+# 2. Pre-pull the ASR model. PRELOAD_MODELS in the compose is IGNORED by the
+#    current image, and the healthcheck returns 200 on an empty model list — so
+#    Speaches goes "healthy" with nothing loaded and the router silently drops to
+#    CPU. See docs/BLOCKERS.md B-005.
+docker run -d --name speaches-prewarm --gpus all \
+  -v transcribe-svc_speaches_models:/home/ubuntu/.cache/huggingface \
+  ghcr.io/speaches-ai/speaches:latest-cuda
+docker exec speaches-prewarm \
+  curl -s -X POST "http://127.0.0.1:8001/v1/models/Systran/faster-whisper-large-v3"
+docker exec speaches-prewarm curl -s http://127.0.0.1:8001/v1/models   # must be non-empty
+docker rm -f speaches-prewarm     # the named volume persists; compose reuses it
+```
+
+### Bring-up (order matters)
+
+All three non-tailscale containers share the tailscale netns and gate on its
+health, so **nothing** starts until Tailscale authenticates. Start it alone first
+— a key/tag/ACL rejection is far easier to read with one container up than four.
+
+```bash
+docker compose -f docker-compose.gpu.yml up -d tailscale
+docker compose -f docker-compose.gpu.yml logs tailscale   # want "Switching ipn state Starting -> Running"
+docker compose -f docker-compose.gpu.yml exec tailscale tailscale status --json \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Self']['DNSName'], d['Self']['Tags'])"
+# Confirm the name is transcribe-svc.<tailnet>, NOT transcribe-svc-1 (stale node — see above).
+
 docker compose -f docker-compose.gpu.yml up -d --build
-docker compose -f docker-compose.gpu.yml logs -f tailscale       # look for "Success."
-docker compose -f docker-compose.gpu.yml logs -f speaches        # model download + "Uvicorn running"
+docker compose -f docker-compose.gpu.yml logs -f speaches        # "Uvicorn running"
+docker compose -f docker-compose.gpu.yml logs -f diarize-svc     # "Loaded diarization pipeline ... on cuda"
 docker compose -f docker-compose.gpu.yml logs -f transcribe-svc  # "Pipeline loaded"
 ```
 
-First run pulls the Speaches CUDA image and downloads
-`Systran/faster-whisper-large-v3` (~3 GB) into the `speaches_models` volume —
-budget 5–15 min. The transcribe-svc image also builds its heavy CPU stack
-(torch / ctranslate2 / pyannote) on first `--build`.
+The transcribe-svc image builds its heavy CPU stack (torch / ctranslate2 /
+pyannote) on first `--build`, and diarize-svc pulls torch cu128 — budget a while
+for both. Neither needs any secret, so both can build while you're still fetching
+keys. Measured 2026-08-14: `transcribe-svc:cpu` 14 GB, `transcribe-svc-diarize:cuda`
+4.4 GB, `speaches:latest-cuda` 8.6 GB.
 
 Once all three are healthy, from any tagged `transcribe-client` host:
 
@@ -246,11 +309,20 @@ in the `asr_backend` field on each transcription response.
 (`127.0.0.1:8000`), so the installable **PWA** is at <http://localhost:8000> on
 the Alienware itself. In static mode, paste the API token in Settings; in
 hybrid/OIDC mode, use **Sign in**. Then drag in an audio file, record, or click
-a committed sample (`/samples`). Over the tailnet the same app
-is at `http://transcribe-svc.<tailnet>.ts.net:8000` — note that's **http on
-:8000**, not https; mic recording + "Add to Home Screen" require a secure
-context, so for full mobile use add `tailscale serve` (HTTPS) later. `localhost`
-is already a secure context, so recording works there.
+a committed sample (`/samples`).
+
+Over the tailnet, use the **HTTPS** URL (enabled 2026-08-14):
+**`https://transcribe-svc-1.example-tailnet.ts.net`** — no port. Mic recording and
+"Add to Home Screen" require a secure context, which this provides via a real
+Let's Encrypt cert. `localhost` is also a secure context, so recording works
+there without HTTPS.
+
+⚠️ **Switching a device from `http://…:8000` to the HTTPS URL is an origin
+change.** Installed PWAs, stored API tokens, and service workers are all
+per-origin, so each device must reopen the HTTPS URL, re-enter the token in
+Settings, and re-run "Add to Home Screen". A browser holding the old service
+worker needs one hard refresh (`Ctrl+Shift+R`); it self-updates after that. Enable
+HTTPS **before** rolling the app out to devices to avoid making everyone redo it.
 
 ### First-transcribe smoke test
 
@@ -261,8 +333,31 @@ curl -H "Authorization: Bearer $API_TOKEN" \
      http://localhost:8000/v1/transcribe
 ```
 
-Expected: HTTP 200 with `transcript_txt_url` and `transcript_json_url`. Fetch
-the `.json` and check `"asr_backend": "speaches@http://127.0.0.1:8001"`.
+Expected: HTTP 200 with `transcript_txt_url` and `transcript_json_url`.
+
+**Then verify what actually served** — this is the step that catches a silent CPU
+fallback, and it is not optional. A degraded stack still returns 200:
+
+```bash
+ID=$(... .id from the response ...)
+curl -fsS -H "Authorization: Bearer $API_TOKEN" \
+     "http://localhost:8000/v1/results/$ID/transcript.json" \
+| python3 -c "import sys,json; d=json.load(sys.stdin); print(d['asr_backend']); print(d['diarize_device'])"
+```
+
+| Field | Good (GPU) | Degraded (silent CPU fallback) |
+|---|---|---|
+| `asr_backend` | `speaches@http://127.0.0.1:8001` | `local-whisperx` |
+| `diarize_device` | `cuda` | `cpu-fallback` |
+
+Warm throughput on the RTX 5090 is **~8.7–10.9× realtime**. If a job runs slower
+than realtime you are on the CPU tier regardless of what the healthchecks say.
+
+**`/v1/health` does not tell you this.** It reports
+`{"device":"cpu","gpu":false}` even when everything is correctly on the GPU —
+that field describes the *local WhisperX fallback tier* inside transcribe-svc, not
+what served the request. Speaches and diarize-svc hold the GPU reservations and
+report per-response in the fields above.
 
 ### Running the unit tests on the Alienware (no torch, no GPU)
 
@@ -279,8 +374,8 @@ curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
 ~/venvs/tsl/bin/pip install fastapi==0.115.5 python-multipart==0.0.18 \
     pydantic==2.10.3 pydantic-settings==2.7.0 httpx==0.27.2 \
     pytest pytest-asyncio==0.24.0 python-dateutil==2.9.0
-cd "/mnt/c/Users/<user>/<folder>/transcriberproject"
-~/venvs/tsl/bin/python -m pytest tests/ -q      # 39 passing
+cd /mnt/c/Users/<user>/Github/transcriberproject   # repo path as of 2026-08-14
+~/venvs/tsl/bin/python -m pytest tests/ -q      # 39 passing at the time of writing; 85 after the OIDC bridge
 ```
 
 For the full pipeline (torch) run tests inside the built image instead:
@@ -293,9 +388,29 @@ For the full pipeline (torch) run tests inside the built image instead:
   and `wsl --shutdown`, then reopen.
 - **Speaches health check keeps timing out** — model load takes 30–90 s on
   first startup. Increase `start_period` in `docker-compose.gpu.yml`.
-- **Requests hang for minutes** — likely the router silently fell back to
-  local-whisperx on CPU. Check `docker compose logs speaches`; if Speaches
-  isn't ready, transcribe-svc uses the CPU tier.
+- **Requests hang for minutes / jobs succeed but are 5–10× too slow** — the
+  router silently fell back to local-whisperx on CPU. Confirm via
+  `asr_backend` in the transcript `.json` (see the smoke test above), not via
+  healthchecks. **Most common cause: Speaches is up but has no model.**
+  `/v1/models` returns 200 with `{"data":[]}`, so the container reads as healthy
+  while 404-ing every transcription. Check and fix:
+  ```bash
+  docker compose -f docker-compose.gpu.yml exec speaches curl -s http://127.0.0.1:8001/v1/models
+  # empty? pull it:
+  docker compose -f docker-compose.gpu.yml exec speaches \
+    curl -s -X POST "http://127.0.0.1:8001/v1/models/Systran/faster-whisper-large-v3"
+  ```
+  `PRELOAD_MODELS` is supposed to prevent this but is ignored by the current
+  image — see `docs/BLOCKERS.md` **B-005**.
+- **Everything is healthy but the tailnet URL 404s / cert is for the wrong name**
+  — a stale offline node is holding the `transcribe-svc` MagicDNS name and this
+  node registered as `transcribe-svc-1`. Confirm with
+  `docker compose -f docker-compose.gpu.yml exec tailscale tailscale status | grep transcribe`,
+  delete the stale node in the admin console, then
+  `docker compose -f docker-compose.gpu.yml restart tailscale`.
+- **Docs say it's deployed but nothing is running** — verify before believing:
+  `docker compose -f docker-compose.gpu.yml ps` and `docker volume ls`. An empty
+  result means a cold rebuild, not a restart (happened 2026-08-14).
 - **Container fails to start with "not found" on entrypoint.sh** — a CRLF line
   ending crept in. `.gitattributes` forces LF; if you edited the file with a
   Windows tool, run `git add --renormalize . && git checkout -- docker/`.

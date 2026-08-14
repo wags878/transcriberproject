@@ -8,11 +8,18 @@ A privately-hosted HTTP service that accepts audio recordings, transcribes them 
 
 **Picking up cold?** Start with **`docs/HANDOFF.md`** — current state, how to run, and the next task.
 
-The GPU transcription stack is deployed on the Alienware host (Windows 11 +
-Docker Desktop, RTX 5090). The current worktree also contains a **Codex-built,
-provider-neutral OIDC bridge** with static/hybrid/OIDC modes; it is tested but
-has not yet been configured against a real Cognito user pool or deployed. See
-`docs/AUTH.md` for that rollout and `docs/STATUS.md` for the running phase log.
+The GPU transcription stack runs on the Alienware host (Windows 11 + Docker
+Desktop, RTX 5090), rebuilt and verified **2026-08-14** at ~10.9× realtime.
+Verify before assuming it's up — `docker compose -f docker-compose.gpu.yml ps`
+should show four healthy containers; an empty result means a cold rebuild, not a
+restart. Served over HTTPS on the tailnet at
+**`https://transcribe-svc-1.example-tailnet.ts.net`** (mic capture + PWA install work).
+The `-1` in that hostname is permanent — see `docs/HANDOFF.md`.
+
+The current worktree also contains a **Codex-built, provider-neutral OIDC bridge**
+with static/hybrid/OIDC modes; it is tested but has not yet been configured
+against a real Cognito user pool or deployed. See `docs/AUTH.md` for that rollout
+and `docs/STATUS.md` for the running phase log.
 
 The PWA client adds an **Audio language** selector (default English), an **Output** selector (*Same as audio* / *English translate*), and post-transcription **speaker editing** (rename / reassign). This is a **patient-owned** recorder for any patient↔provider interaction, not just therapy — role labels are generic.
 

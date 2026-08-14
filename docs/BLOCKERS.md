@@ -151,7 +151,7 @@ When either happens, bump `whisperx` to a 3.3+ release and remove the libav-dev 
 
 ## B-004 — `pyannote/speaker-diarization-community-1` requires HF token after all
 
-**Status:** OPEN — pending operator action
+**Status:** RESOLVED — 2026-08-14 (operator supplied `HF_TOKEN`; access verified)
 **Opened:** 2026-04-30
 **Phase:** 1
 **Acceptance item affected:** §6 Phase 1 — fixture WAV → 200 + speaker-labeled `.txt`
@@ -183,3 +183,108 @@ Once `HF_TOKEN` is set, the pipeline will download the model on next request and
 
 ### Spec correction
 Update `project_decisions.md` (memory) and PROJECT_PLAN.md §8 Q7 next time it's revised: a HF account + token are required even for `community-1`. The community vs 3.1 distinction is about the *license* (CC-BY-4.0 vs custom), not about download authentication.
+
+### Resolution (2026-08-14)
+Operator populated `HF_TOKEN` in `.env` during the cold rebuild. Verified before
+first transcribe rather than discovering it mid-job — all three models the stack
+needs return HTTP 200 for that token:
+
+```sh
+HF=$(awk -F= '/^HF_TOKEN=/{print $2}' .env)
+for m in pyannote/speaker-diarization-3.1 \
+         pyannote/segmentation-3.0 \
+         pyannote/wespeaker-voxceleb-resnet34-LM; do
+  curl -s -o /dev/null -w "$m -> %{http_code}\n" \
+       -H "Authorization: Bearer $HF" "https://huggingface.co/api/models/$m"
+done
+```
+
+A 403 on any line means the conditions page for that model has not been accepted.
+Worth running on any fresh clone: a bad/missing token does not fail at startup,
+it fails inside the first transcription (see the `asyncio.gather` note in B-005).
+
+---
+
+## B-005 — Speaches ignores `PRELOAD_MODELS`; healthcheck passes with no model
+
+**Status:** OPEN — worked around, needs a real fix
+**Opened:** 2026-08-14
+**Phase:** Infra (cold rebuild)
+**Affects:** `docker-compose.gpu.yml` (speaches service)
+
+### What surfaced
+
+During the 2026-08-14 cold rebuild, `ghcr.io/speaches-ai/speaches:latest-cuda`
+was started with exactly the compose's environment — `PRELOAD_MODELS`,
+`WHISPER__COMPUTE_TYPE`, telemetry off — and downloaded **nothing**:
+
+```
+$ curl -s http://127.0.0.1:8001/v1/models
+{"data":[],"object":"list"}
+```
+
+The startup config dump the image prints contains no preload field at all, so the
+variable is simply not read by the current image.
+
+### Why this is worse than a slow first request
+
+The compose healthcheck is:
+
+```yaml
+test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/v1/models"]
+```
+
+`/v1/models` returns **HTTP 200 with an empty list** when no model is present. So
+the container is marked **healthy** while being unable to serve a transcription.
+The failure then surfaces one layer up and silently: `ASRRouter` health-checks
+Speaches, sees it up, sends the job, gets a 404 for the un-downloaded model, and
+falls back to `local-whisperx` on CPU. The operator sees a *successful* response
+that took 5–10× longer than expected, with no error anywhere.
+
+This is the exact failure the line-62 comment in `docker-compose.gpu.yml` records
+as "learned at deploy" — `PRELOAD_MODELS` was added to prevent it, and has since
+silently stopped doing so. The guard rotted; the trap did not.
+
+### Workaround applied 2026-08-14
+
+Pre-pull the model into the compose volume before first `up`. The image does
+expose a working download endpoint:
+
+```sh
+docker run -d --name speaches-prewarm --gpus all \
+  -v transcribe-svc_speaches_models:/home/ubuntu/.cache/huggingface \
+  ghcr.io/speaches-ai/speaches:latest-cuda
+docker exec speaches-prewarm \
+  curl -s -X POST "http://127.0.0.1:8001/v1/models/Systran/faster-whisper-large-v3"
+docker rm -f speaches-prewarm     # volume persists; compose reuses it
+```
+
+~2.9 GB, a few minutes. Compose then starts Speaches with the model already
+cached. (Compose warns the volume "was not created by Docker Compose" — cosmetic.)
+
+### Real fixes to choose between
+
+1. **Assert the model, not the endpoint** — make the healthcheck prove the model
+   is actually loaded, so an empty Speaches never reads as healthy:
+   ```yaml
+   test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8001/v1/models | grep -q faster-whisper-large-v3"]
+   ```
+   Cheapest change and it closes the silent-fallback hole directly.
+2. **Pin a Speaches tag that honors `PRELOAD_MODELS`** — `latest-cuda` is a
+   floating tag, which is how this regressed unnoticed. Pinning also satisfies the
+   "pull only after Phase 4 pins SHAs" note in `DEPLOY.md`.
+3. **Make the fallback loud.** `ASRRouter` (`app/asr.py`) has two distinct
+   fallback paths and neither reaches the caller:
+   - backend fails `health()` → logged at **info**, skipped;
+   - backend passes `health()` then raises mid-request → logged at **warning**,
+     falls through to the next backend.
+
+   The B-005 case takes the *second* path: Speaches is healthy, 404s the job,
+   gets caught, and `local-whisperx` serves it — so the response is a normal 200
+   and the only trace is one warning line. The transcript header does record the
+   truth in `asr_backend`, but nothing surfaces it at request time. Surfacing
+   degradation in `/v1/health` (or a response header) would make this class of
+   regression visible without reading logs.
+
+Recommend (1) + (2) together: (1) stops the bad state from being called healthy,
+(2) stops the floating tag from changing behavior under us again.

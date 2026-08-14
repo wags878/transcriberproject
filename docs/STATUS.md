@@ -547,3 +547,100 @@ another conforming provider can replace it later.
 **Next:** provision a Cognito development pool/client, deploy in `hybrid` mode,
 complete the synthetic rollout checklist in `docs/AUTH.md`, then decide whether
 to proceed to per-user storage ownership or return to Track B live-enable.
+
+---
+
+## 2026-08-14 — Cold rebuild on the Alienware (fresh clone, empty Docker state)
+
+The stack was **not** running. Docs from 2026-07-13 described it as deployed and
+healthy here; reality was a fresh clone at a new path with no `.env` and a Docker
+install holding zero transcribe-svc images, containers, or volumes. Rebuilt from
+scratch and back online. Nothing about the *design* was wrong — this entry exists
+because the docs asserted a running deployment that no longer existed, which cost
+the first chunk of the session to discover.
+
+**What had drifted:**
+
+| Doc claim | Reality on 2026-08-14 |
+|---|---|
+| Stack deployed and healthy on the Alienware | No images/containers/volumes at all |
+| Repo at `<folder>/transcriberproject` | `C:\Users\<user>\Github\transcriberproject` |
+| Reachable at `transcribe-svc.<tailnet>.ts.net` | Name held by a stale node; new node is `transcribe-svc-1` |
+| `PRELOAD_MODELS` prevents the empty-Speaches trap | Silently ignored by the image (**B-005**) |
+
+**Bring-up order that worked** (the sequencing matters — the three non-tailscale
+containers share the tailscale netns and gate on its health, so nothing else can
+start until Tailscale authenticates):
+
+1. `docker compose build transcribe-svc` and
+   `docker compose -f docker-compose.gpu.yml build diarize-svc` — neither needs a
+   secret, so both can run while the operator is still fetching keys.
+2. Verify GPU passthrough and HF access **before** bring-up (see below).
+3. Pre-pull the Speaches model into `transcribe-svc_speaches_models` (**B-005**).
+4. `up -d tailscale` alone first — it is the gate and the likeliest thing to fail
+   (key/tag/ACL). Failing here with one container up is much easier to read than
+   failing with four.
+5. `up -d` for the rest.
+
+**Verified live, this host:**
+
+| Check | Result |
+|---|---|
+| GPU passthrough | RTX 5090 Laptop, 24463 MiB, driver 592.02 |
+| Tailscale | authenticated, `tag:transcribe-svc`, healthy |
+| ASR that served | `speaches@http://127.0.0.1:8001` (`Systran/faster-whisper-large-v3`) |
+| Diarization device | `cuda` (`pyannote/speaker-diarization-3.1`) |
+| Throughput (warm) | 90.9 s audio → **8.3 s wall ≈ 10.9× realtime** |
+| Transcript | 2 speakers separated, `en`, 15 segments |
+| PWA `/` + `/samples` | 200 |
+| Auth | 401 unauthenticated |
+| Listener posture | `0.0.0.0:8000` only; 8001/8002 loopback-only |
+
+10.9× on a 90 s clip reproduces the 2026-07-13 GPU-diarization number exactly, so
+this rebuild performs identically to the deployment it replaced.
+
+**Two verifications promoted to pre-flight.** Both failure modes are invisible at
+startup and only bite mid-job, so they now run before `up`:
+
+- **HF token/model access** — a bad token does not fail at boot. `transcribe()`
+  runs ASR and diarization under `asyncio.gather` with no `return_exceptions`, so
+  a diarization load failure takes down the whole request. Check returns 200 for
+  all three gated models (B-004).
+- **Speaches model presence** — an empty Speaches reports *healthy* and degrades
+  to CPU silently (B-005).
+
+**Config changed for this host** (was tuned for the 15.6 GiB / 16-vCPU Proxmox VM;
+this box has 24 CPUs and 31 GiB to Docker): `WHISPER_MODEL=large-v3`,
+`MAX_CONCURRENT_JOBS=2`. These only affect the CPU fallback tier — GPU ASR model
+selection is `ASR_MODEL_ID`.
+
+**HTTPS enabled, same day.** `tailscale serve --bg 8000` →
+**`https://transcribe-svc-1.example-tailnet.ts.net`**, cert verifies clean
+(`ssl_verify_result=0`) from both inside the netns and the Windows host. Mic
+capture and PWA install work. Serve config persists in `tailscale_state`.
+
+**MagicDNS name is `transcribe-svc-1` and that is now permanent.** Worth recording
+in full, because the obvious fixes all fail:
+
+1. The stale `transcribe-svc` node was deleted — the name **did not** come back.
+2. Container restart / full `down` + `up` — still `-1`. Node identity lives in the
+   `tailscale_state` volume; reconnecting ≠ re-registering.
+3. `tailscale set --hostname=transcribe-svc` — accepted, no change. The control
+   plane keeps the name assigned at registration.
+4. Admin-console rename — unavailable; the console won't override a
+   hostname-derived name.
+
+Only a wipe of `tailscale_state` forces fresh registration, and that requires a
+known-**reusable** `TS_AUTHKEY`: every container gates on tailscale's health, so a
+consumed single-use key would leave the entire stack down. Operator decision: not
+worth the risk for a cosmetic name. Docs standardized on `transcribe-svc-1`.
+
+**The actual lesson:** delete stale nodes *before* first bring-up. Afterward is
+too late — MagicDNS assignment is sticky. `docs/DEPLOY.md` Tailscale prep now says
+so explicitly.
+
+**Still open:**
+- B-005 needs a real fix (healthcheck assertion + pinned Speaches tag).
+- The old `transcribe-svc-1` → nothing to clean up, but the retired Proxmox node
+  `transcriber` (100.69.164.58, offline 28d+) is still in the tailnet.
+- OIDC bridge still not deployed (no Cognito pool).
