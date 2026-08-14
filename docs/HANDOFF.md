@@ -88,7 +88,11 @@ To bring up / verify from scratch: `README.md` Quick start + `docs/DEPLOY.md`.
   rollout modes. No Cognito SDK and no dependency on AWS hosting.
 - **Output language phase 1** — `task=transcribe|translate` (Whisper does
   source-lang or English only; arbitrary targets = phase 2, not built).
-- **Track B (voice enrollment)** — built, **off by default** (`ENABLE_ROLE_LABELS=0`).
+- **Track B (voice enrollment)** — **LIVE** as of 2026-08-14
+  (`ENABLE_ROLE_LABELS=1`). One enrollment: `Speaker A`. The enrolled speaker is named
+  in the transcript; in an exactly-2-speaker session the other becomes
+  `CLIENT_LABEL` (currently `Speaker`). Threshold 0.5, validated on real voices —
+  `ml/enroll/reports/2026-08-14-real-voice-sweep.md`.
 
 ## Fallback to the old CPU server (Proxmox VM)
 
@@ -116,21 +120,61 @@ the operator's `.env` (the static/hybrid emergency bearer; rotate freely).
 OIDC adds `AUTH_MODE`, `OIDC_ISSUER`, and `OIDC_CLIENT_ID`; none are secrets.
 Keep `API_TOKEN` secret while hybrid mode is enabled.
 
-## Next task → ML Track B live-enable (needs one operator clip)
+## ML Track B — LIVE as of 2026-08-14
 
-Track B code is done and off by default. To turn it on:
-1. The image already ships `app/embed.py` + `app/roles.py` (merged to main; rebuild
-   transcribe-svc if the running container predates it).
-2. **Enroll the PATIENT's voice** (not the provider — the patient holds the app and
-   can record a solo clip easily; the provider is inferred as the other speaker):
-   ```
-   docker compose -f docker-compose.gpu.yml run --rm -v ${PWD}/ml:/app/ml \
-     transcribe-svc python -m ml.enroll.enroll --name "You" --clip <ref.wav> --out-dir /data/enrollments
-   ```
-3. Set `ENABLE_ROLE_LABELS=1` (and `CLIENT_LABEL=Patient`/`Doctor`/… to taste) in
-   `.env`, then `docker compose -f docker-compose.gpu.yml up -d`.
-4. **Re-sweep the threshold on real voices** before trusting it — synthetic voices
-   separate more cleanly than real ones (`python -m ml.enroll.sweep`).
+Enabled with one real enrollment (`Speaker A`) and validated on real voices. Config in
+`.env`: `ENABLE_ROLE_LABELS=1`, `ROLE_MATCH_THRESHOLD=0.5`, `CLIENT_LABEL=Speaker`.
+Measured separation: genuine 0.59–0.72 vs impostor 0.13. Full numbers, caveats,
+and a write-up of how a first pass mis-measured it are in
+**`ml/enroll/reports/2026-08-14-real-voice-sweep.md`**.
+
+### To add another enrollment
+
+```sh
+# 1. Convert to WAV first — pyannote loads via torchaudio, which will NOT read
+#    the WebM/Opus the PWA records.
+docker compose -f docker-compose.gpu.yml exec transcribe-svc \
+  ffmpeg -y -i /data/uploads/<id>.webm -ac 1 -ar 16000 -c:a pcm_s16le /data/uploads/ref.wav
+
+# 2. Enroll (ml/ is not in the image — bind-mount it). Repeat --clip for
+#    several reference clips; the vectors are averaged, and 2-3 clips from
+#    different rooms/devices give a far more robust voiceprint than one.
+docker compose -f docker-compose.gpu.yml run --rm -v ${PWD}/ml:/app/ml \
+  transcribe-svc python -m ml.enroll.enroll --name "Name" \
+    --clip /data/uploads/ref.wav --out-dir /data/enrollments
+
+# 3. Restart, then re-sweep — a new enrollment invalidates the old threshold.
+docker compose -f docker-compose.gpu.yml up -d transcribe-svc
+```
+
+### Gotchas worth knowing before you touch this
+
+- **The enrolled speaker must be alone in the enrollment clip.** One of the
+  operator's clips read as a single speaker but contained two people; enrolling it
+  would have blended both voices into one useless centroid. Check
+  `speakers_detected` *and* read the transcript before enrolling.
+- **`/data/enrollments` must be a named volume** — it is, since 2026-08-14. It
+  previously was not, so any `up -d` would have silently discarded the voiceprint
+  and role labeling would have quietly stopped. Also note the image must create
+  the directory: Docker seeds a fresh volume's ownership from the image, so a
+  missing path mounts root-owned and enrollment fails with `EACCES`.
+- **Only one cluster can win a name.** `match_clusters` is greedy one-to-one, so
+  if diarization splits the enrolled speaker across two clusters, only the
+  higher-scoring one gets named. Observed in practice.
+- **`CLIENT_LABEL` only applies with exactly 2 detected speakers.** A third
+  speaker (or an unattributed `SPEAKER_??` segment) disables the inference, and
+  everyone but the enrolled speaker stays anonymous.
+- **Voiceprints are biometric data.** Local volume only — never on shared or
+  cloud storage, and treat the volume like a secret.
+
+### Known robustness gap (not yet fixed)
+
+Whisper can emit a segment end time past the real audio duration (seen:
+29.84 s on a 22.87 s file). `compute_cluster_embeddings` then crops out of bounds,
+throws per-segment, and that cluster produces **no vector at all** — silently
+skipped. If it hits the enrolled speaker's cluster, role labeling does nothing
+with no error. Fix would be clamping segment ends to the audio duration in
+`app/roles.py` before embedding.
 
 ## Other on-deck (not started)
 

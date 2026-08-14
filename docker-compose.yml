@@ -20,6 +20,9 @@ services:
       - models:/data/models
       - uploads:/data/uploads
       - outputs:/data/outputs
+      # Track B voiceprints — see docker-compose.gpu.yml for why this must be a
+      # volume. Biometric data; keep local.
+      - enrollments:/data/enrollments
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
       interval: 30s
@@ -31,3 +34,4 @@ volumes:
   models:
   uploads:
   outputs:
+  enrollments:

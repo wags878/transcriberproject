@@ -70,8 +70,12 @@ COPY samples/ ./samples/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# /data is the mountpoint for the named volumes (models, uploads, outputs).
-RUN mkdir -p /data/models /data/uploads /data/outputs \
+# /data is the mountpoint for the named volumes (models, uploads, outputs,
+# enrollments). Each must exist and be app-owned *in the image*: Docker seeds a
+# fresh named volume's ownership from the directory it mounts over, so a path
+# missing here mounts as root and the non-root runtime user cannot write to it
+# (hit with /data/enrollments — Track B enrollment failed with EACCES on save).
+RUN mkdir -p /data/models /data/uploads /data/outputs /data/enrollments \
  && chown -R app:app /data /app
 
 USER app

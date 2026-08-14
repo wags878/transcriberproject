@@ -237,6 +237,12 @@ services:
       - models:/data/models
       - uploads:/data/uploads
       - outputs:/data/outputs
+      # Track B voiceprints. MUST be a volume: ENROLLMENTS_DIR defaults to
+      # /data/enrollments, which is otherwise container-local, so every
+      # `up -d` would silently discard the enrollment and role labeling would
+      # quietly stop working with no error. Contains BIOMETRIC data — keep it
+      # local, never on shared/cloud storage, and treat it like a secret.
+      - enrollments:/data/enrollments
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
@@ -252,3 +258,5 @@ volumes:
   models:
   uploads:
   outputs:
+  # Biometric voiceprints (Track B). Local named volume by design.
+  enrollments:

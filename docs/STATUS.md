@@ -668,4 +668,56 @@ deliberate CPU fallback. What changed is that degradation is now visible in
 - Retired Proxmox node `transcriber` (100.69.164.58, offline 28d+) still in the
   tailnet — harmless, just debris.
 - OIDC bridge still not deployed (no Cognito pool).
-- Track B live-enable still needs one operator voice clip.
+
+---
+
+## 2026-08-14 — ML Track B live-enabled on real voices
+
+Track B (voice enrollment → role labels) is **on**. One enrollment, `Speaker A`, built
+from a 12.1 s solo clip the operator recorded through the PWA. `.env`:
+`ENABLE_ROLE_LABELS=1`, `ROLE_MATCH_THRESHOLD=0.5`, `CLIENT_LABEL=Speaker`.
+Verified live — the enrolled speaker is named in the transcript and the other
+person stays anonymous.
+
+**Two infrastructure bugs had to be fixed first, both of which would have made
+this silently not work:**
+
+1. **`/data/enrollments` was not a volume.** `ENROLLMENTS_DIR` defaults there, but
+   compose only mounted `models`, `uploads`, `outputs` — so the voiceprint lived
+   on the container filesystem and every `up -d` would have discarded it. Role
+   labeling would then quietly stop with no error. Added an `enrollments` volume
+   to both the GPU and CPU composes.
+2. **The image never created `/data/enrollments`.** Docker seeds a fresh named
+   volume's ownership from the directory it mounts over; with no such directory
+   the volume mounted root-owned and enrollment died with `PermissionError` on
+   save. Added it to `Dockerfile.cpu`'s mkdir/chown.
+
+**Real-voice sweep — the first non-synthetic measurement.** Full report:
+`ml/enroll/reports/2026-08-14-real-voice-sweep.md`.
+
+| | Genuine | Impostor | Gap |
+|---|---|---|---|
+| Synthetic (2026-07-12) | 0.850–0.920 | 0.158–0.226 | 0.62 |
+| **Real** | 0.590–0.718 | **0.128** | **0.46** |
+
+Real voices separate less than synthetic, but the degradation is on the *genuine*
+side (~0.15 lower); impostor similarity is essentially unchanged. So the practical
+failure mode on real audio is a **missing** label, not a **wrong** one — the safe
+direction for a medical transcript. 0.5 sits 0.37 above the impostor and 0.09
+below the lowest genuine.
+
+**A first pass got this wrong and briefly set 0.65.** The probe clip's initial
+transcription never surfaced the second speaker at all — his Spanish went
+untranscribed — so both available clusters were the *same* person and a genuine
+score of 0.6113 was read as an impostor, implying a dangerously tight 0.126 gap.
+Re-running the clip as WAV produced three speakers, the Spanish text, and a true
+impostor at 0.1282. The corrected threshold buys real protection; 0.65 only
+produced false negatives on the operator's own voice. **Lesson: establish who each
+cluster actually is before treating a low score as an impostor score** — a "gap"
+between two unidentified clusters is not evidence of anything.
+
+**Known gap, not fixed:** Whisper can emit a segment ending past the audio
+duration (29.84 s on a 22.87 s file). `compute_cluster_embeddings` crops out of
+bounds, throws per-segment, and drops that cluster entirely with no error. Benign
+here; if it hits the enrolled speaker's cluster, labeling silently no-ops.
+Clamping segment ends to the audio duration in `app/roles.py` would fix it.
