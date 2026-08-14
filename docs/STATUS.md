@@ -639,8 +639,33 @@ worth the risk for a cosmetic name. Docs standardized on `transcribe-svc-1`.
 too late — MagicDNS assignment is sticky. `docs/DEPLOY.md` Tailscale prep now says
 so explicitly.
 
+**B-005 fixed, same day.** Three changes to `docker-compose.gpu.yml`:
+
+1. **Healthcheck asserts the model**, not just that `/v1/models` answers. Proven
+   against a throwaway Speaches on an empty volume — the old check exits 0 there
+   (reports healthy), the new one exits non-zero (reports unhealthy). That empty
+   state is the entire bug, so testing the negative case was the point.
+2. **Image pinned by digest** (`@sha256:6ec12eb…`). The floating `:latest-cuda`
+   is *how* this regressed with no change on our side. No usable semantic version
+   label exists on the image, so a digest is the only precise pin.
+3. **`speaches-model-init`**, a one-shot that actually downloads the model —
+   restoring the behavior `PRELOAD_MODELS` was meant to provide. Idempotent,
+   `restart: "no"`. Depends on speaches with `service_started`, **not**
+   `service_healthy`: the new healthcheck requires the model this service
+   downloads, so gating on healthy would deadlock.
+
+`PRELOAD_MODELS` is retained with a comment saying it does nothing, so it isn't
+re-added later as a "fix".
+
+Verified after the change: init logged `already cached, nothing to do` (exit 0),
+speaches healthy under the new check, HTTPS transcription at **~10.8× realtime**
+with `speaches@…` / `cuda`. Note an unhealthy speaches still does not stop the
+stack — `transcribe-svc` depends on it with `service_started`, preserving the
+deliberate CPU fallback. What changed is that degradation is now visible in
+`docker compose ps` rather than invisible.
+
 **Still open:**
-- B-005 needs a real fix (healthcheck assertion + pinned Speaches tag).
-- The old `transcribe-svc-1` → nothing to clean up, but the retired Proxmox node
-  `transcriber` (100.69.164.58, offline 28d+) is still in the tailnet.
+- Retired Proxmox node `transcriber` (100.69.164.58, offline 28d+) still in the
+  tailnet — harmless, just debris.
 - OIDC bridge still not deployed (no Cognito pool).
+- Track B live-enable still needs one operator voice clip.

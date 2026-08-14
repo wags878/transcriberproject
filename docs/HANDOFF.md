@@ -47,6 +47,7 @@ HIPAA-grade → local-only posture, synthetic-only ML rule.
 | `speaches` | ASR (`faster-whisper-large-v3`), OpenAI-compat on `127.0.0.1:8001` | **GPU** |
 | `diarize-svc` | pyannote diarization sidecar on `127.0.0.1:8002` (torch cu128) | **GPU** |
 | `transcribe-svc` | FastAPI orchestrator + PWA; routes ASR→speaches, diarization→diarize-svc | CPU (orchestration) |
+| `speaches-model-init` | **one-shot** — fetches the ASR model on first `up`, then exits 0. `Exited (0)` in `ps` is the correct steady state, not a failure (B-005) | — |
 
 - **Access:** PWA + API at **`https://transcribe-svc-1.example-tailnet.ts.net`**
   (tailnet, valid Let's Encrypt cert — mic recording + PWA install work on
@@ -157,15 +158,18 @@ Track B code is done and off by default. To turn it on:
   — corrected 2026-08-14. Plain `docker` and `docker compose` work from Git Bash.
   The PowerShell caveat may still apply: if a build fails on "getting credentials",
   prepend that directory to `$env:PATH` so `docker-credential-desktop` resolves.
-- **Speaches can be healthy with no model — and silently drop you to CPU.**
-  `PRELOAD_MODELS` in the GPU compose is ignored by the current image, and the
-  healthcheck (`curl /v1/models`) returns 200 on an empty list. Symptom: jobs
-  succeed but run 5–10× slower than expected. Always confirm what actually served:
-  ```sh
-  # in the transcript .json — want speaches@…, NOT local-whisperx
-  #                          want cuda,      NOT cpu-fallback
-  ```
-  See **B-005** for the pre-pull workaround and the real fix.
+- **Speaches used to go "healthy" with no model and silently drop you to CPU —
+  fixed 2026-08-14 (B-005).** Its healthcheck now greps `/v1/models` for the model
+  id (the old one just checked the endpoint answered, which returns 200 on an
+  empty list), the image is pinned by digest instead of the floating `:latest-cuda`
+  that caused the regression, and `speaches-model-init` fetches the model
+  automatically. Still worth confirming what actually served on any perf
+  complaint — the transcript `.json` should say `speaches@…` (not
+  `local-whisperx`) and `cuda` (not `cpu-fallback`).
+- **Slow ≠ CPU fallback.** Speaches evicts the model after 5 min idle
+  (`ttl=300`); the next request pays a reload. Measured 0.9× cold vs 10.3× warm on
+  the same clip — an 11× swing that looks exactly like a fallback and isn't.
+  Diagnose from the transcript header, never from wall-clock.
 - **No `gh` CLI** (Windows or WSL). Open PRs via the GitHub web UI / the push URL.
 - PowerShell 5.1 flips `$?` to false on any native-command stderr, so BuildKit
   progress reads as a false "build failed" — check for `… Built` in the log.

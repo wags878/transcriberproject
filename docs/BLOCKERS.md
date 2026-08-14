@@ -207,7 +207,7 @@ it fails inside the first transcription (see the `asyncio.gather` note in B-005)
 
 ## B-005 — Speaches ignores `PRELOAD_MODELS`; healthcheck passes with no model
 
-**Status:** OPEN — worked around, needs a real fix
+**Status:** RESOLVED — 2026-08-14 (fix applied and verified; see Resolution below)
 **Opened:** 2026-08-14
 **Phase:** Infra (cold rebuild)
 **Affects:** `docker-compose.gpu.yml` (speaches service)
@@ -288,3 +288,52 @@ cached. (Compose warns the volume "was not created by Docker Compose" — cosmet
 
 Recommend (1) + (2) together: (1) stops the bad state from being called healthy,
 (2) stops the floating tag from changing behavior under us again.
+
+### Resolution (2026-08-14) — all three applied
+
+**1. Healthcheck asserts the model, not the endpoint.**
+
+```yaml
+test:
+  - CMD-SHELL
+  - curl -fsS http://127.0.0.1:8001/v1/models | grep -q "${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}"
+```
+
+Verified against a throwaway Speaches on an empty volume — the decisive test,
+since the whole bug is that the *old* check passed in exactly this state:
+
+| Healthcheck | Empty Speaches | Verdict |
+|---|---|---|
+| old — `curl -fsS /v1/models` | exit **0** | reports HEALTHY ← the bug |
+| new — grep for model id | exit **non-zero** | reports UNHEALTHY ← fixed |
+
+**2. Image pinned by digest.** `:latest-cuda` →
+`@sha256:6ec12ebf890a17e0d4b242a8ba9e0eb1fb836e60e8a3c857aea9838d541579ac`.
+A floating tag is *how this regressed with no change on our side*; the image has
+no usable semantic version label (`org.opencontainers.image.version` is the Ubuntu
+base, `24.04`), so the digest is the only precise pin.
+
+**3. Root cause fixed, not just detected** — new one-shot `speaches-model-init`
+service restores the "a fresh deploy needs no manual pull" behavior
+`PRELOAD_MODELS` was supposed to give. It waits for the API, exits immediately if
+the model is cached, otherwise POSTs `/v1/models/{id}` (which *does* work) and
+verifies the result. Idempotent, `restart: "no"`, so it is a no-op on subsequent
+`up`. It depends on speaches with `service_started`, **not** `service_healthy` —
+the new healthcheck requires the model this service downloads, so waiting for
+healthy would deadlock.
+
+`PRELOAD_MODELS` is deliberately left in place with a comment explaining it does
+nothing, so nobody "fixes" its absence by re-adding it.
+
+**Verified end to end after the change:** init logged `already cached, nothing to
+do` and exited 0; speaches healthy under the new check; transcription over HTTPS
+returned `asr_backend: speaches@…`, `diarize_device: cuda`, 2 speakers, at
+**~10.8× realtime**.
+
+**Residual risk:** the healthcheck greps for `ASR_MODEL_ID`, so changing that
+variable without the model being present makes speaches unhealthy until
+`speaches-model-init` fetches it — which is the intended, visible behavior rather
+than a silent CPU fallback. Note also that unhealthy does **not** stop the stack:
+`transcribe-svc` depends on speaches with `service_started`, preserving the
+deliberate CPU-fallback design. The difference is that the degradation is now
+visible in `docker compose ps` instead of invisible.

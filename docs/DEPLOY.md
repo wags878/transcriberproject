@@ -253,17 +253,11 @@ for m in pyannote/speaker-diarization-3.1 \
 done
 # All three must be 200. A 403 = conditions page not accepted for that model.
 
-# 2. Pre-pull the ASR model. PRELOAD_MODELS in the compose is IGNORED by the
-#    current image, and the healthcheck returns 200 on an empty model list — so
-#    Speaches goes "healthy" with nothing loaded and the router silently drops to
-#    CPU. See docs/BLOCKERS.md B-005.
-docker run -d --name speaches-prewarm --gpus all \
-  -v transcribe-svc_speaches_models:/home/ubuntu/.cache/huggingface \
-  ghcr.io/speaches-ai/speaches:latest-cuda
-docker exec speaches-prewarm \
-  curl -s -X POST "http://127.0.0.1:8001/v1/models/Systran/faster-whisper-large-v3"
-docker exec speaches-prewarm curl -s http://127.0.0.1:8001/v1/models   # must be non-empty
-docker rm -f speaches-prewarm     # the named volume persists; compose reuses it
+# 2. The ASR model download is now AUTOMATIC (B-005 resolved) — the one-shot
+#    `speaches-model-init` service fetches it on first `up` and no-ops after.
+#    No manual pre-pull needed. Just confirm it succeeded afterward:
+#      docker logs transcribe-svc-speaches-init
+#      # "already cached, nothing to do."  or  "done, model is cached."
 ```
 
 ### Bring-up (order matters)
@@ -391,17 +385,21 @@ For the full pipeline (torch) run tests inside the built image instead:
 - **Requests hang for minutes / jobs succeed but are 5–10× too slow** — the
   router silently fell back to local-whisperx on CPU. Confirm via
   `asr_backend` in the transcript `.json` (see the smoke test above), not via
-  healthchecks. **Most common cause: Speaches is up but has no model.**
-  `/v1/models` returns 200 with `{"data":[]}`, so the container reads as healthy
-  while 404-ing every transcription. Check and fix:
+  wall-clock. **Most common cause: Speaches is up but has no model.** Since B-005
+  was fixed this is now *visible* — speaches reports **unhealthy** instead of
+  healthy-but-useless. Check the init service first:
   ```bash
-  docker compose -f docker-compose.gpu.yml exec speaches curl -s http://127.0.0.1:8001/v1/models
-  # empty? pull it:
-  docker compose -f docker-compose.gpu.yml exec speaches \
-    curl -s -X POST "http://127.0.0.1:8001/v1/models/Systran/faster-whisper-large-v3"
+  docker compose -f docker-compose.gpu.yml ps        # is speaches unhealthy?
+  docker logs transcribe-svc-speaches-init           # did the fetch fail?
+  # re-run the one-shot fetch:
+  docker compose -f docker-compose.gpu.yml up -d speaches-model-init
   ```
-  `PRELOAD_MODELS` is supposed to prevent this but is ignored by the current
-  image — see `docs/BLOCKERS.md` **B-005**.
+  `PRELOAD_MODELS` in the compose does nothing — it is retained only so it isn't
+  re-added as a "fix". See `docs/BLOCKERS.md` **B-005**.
+- **A job is slow but `asr_backend` says `speaches@…`** — that is not a fallback.
+  Speaches evicts the model after `ttl=300` (5 min idle) and reloads on the next
+  request. Measured 0.9× cold vs 10.3× warm on the same clip. Send one throwaway
+  request to warm it before timing anything.
 - **Everything is healthy but the tailnet URL 404s / cert is for the wrong name**
   — a stale offline node is holding the `transcribe-svc` MagicDNS name and this
   node registered as `transcribe-svc-1`. Confirm with

@@ -1,10 +1,18 @@
 # GPU deployment for Alienware (Windows 11 + WSL2 + Docker Desktop + RTX 5090).
 #
-# Three-container stack. All three share the tailscale sidecar's network
-# namespace, so:
-#   - transcribe-svc is reachable at https://transcribe-svc.<tailnet>.ts.net
+# Four long-running containers + one one-shot init. All share the tailscale
+# sidecar's network namespace, so:
+#   - transcribe-svc is reachable at https://transcribe-svc-1.<tailnet>.ts.net
+#     (HTTPS via `tailscale serve`; note the -1 — see docs/HANDOFF.md)
 #   - speaches binds 127.0.0.1:8001 (transcribe-svc only; not tailnet-visible)
-#   - No host port bindings anywhere.
+#   - diarize-svc binds 127.0.0.1:8002 (likewise internal)
+#   - No host port bindings except tailscale's 127.0.0.1:8000.
+#
+#   tailscale           netns owner + HTTPS termination
+#   speaches            ASR on GPU
+#   diarize-svc         pyannote diarization on GPU
+#   transcribe-svc      FastAPI orchestrator + PWA (CPU)
+#   speaches-model-init one-shot; fetches the ASR model, then exits 0 (B-005)
 #
 # Bring up: docker compose -f docker-compose.gpu.yml up -d
 #
@@ -14,6 +22,7 @@
 #   - Docker Desktop with WSL2 backend + Ubuntu-22.04 integration
 #   - GPU verify: `docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi`
 #   - Tailscale reusable auth key with tag:transcribe-svc → TS_AUTHKEY in .env
+#     (delete any stale `transcribe-svc` node FIRST — the name is sticky)
 
 name: transcribe-svc
 
@@ -48,7 +57,12 @@ services:
       retries: 3
 
   speaches:
-    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    # PINNED BY DIGEST (B-005). This was `:latest-cuda`, a floating tag — which
+    # is how PRELOAD_MODELS silently stopped being honored without any change on
+    # our side. This digest is the image verified working on 2026-08-14.
+    # To move it deliberately: pull the new tag, re-run the B-005 checks in
+    # docs/DEPLOY.md pre-flight, then update this digest.
+    image: ghcr.io/speaches-ai/speaches@sha256:6ec12ebf890a17e0d4b242a8ba9e0eb1fb836e60e8a3c857aea9838d541579ac
     container_name: transcribe-svc-speaches
     depends_on:
       tailscale:
@@ -59,10 +73,11 @@ services:
       # reaches it via localhost. Do NOT expose on 0.0.0.0.
       UVICORN_HOST: 127.0.0.1
       UVICORN_PORT: "8001"
-      # Download the ASR model at startup so a fresh deploy needs no manual
-      # pull. Without this, Speaches 404s a transcription for an un-downloaded
-      # model and the router silently falls back to CPU (learned at deploy).
-      # PRELOAD_MODELS is a JSON array of model IDs.
+      # NOTE: PRELOAD_MODELS is NOT honored by this image — it is read by
+      # nothing and downloads nothing (B-005). Kept only so the next person
+      # doesn't "helpfully" re-add it. The model is fetched by the
+      # speaches-model-init service below, and its absence is now caught by
+      # this service's healthcheck instead of silently degrading to CPU.
       PRELOAD_MODELS: '["${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}"]'
       WHISPER__COMPUTE_TYPE: int8_float16
       # PHI posture: silence upstream telemetry/analytics. No audio is ever
@@ -82,13 +97,72 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/v1/models"]
+      # B-005: assert the MODEL is present, not merely that the endpoint answers.
+      # /v1/models returns HTTP 200 with {"data":[]} when nothing is downloaded,
+      # so the old `curl -fsS .../v1/models` reported HEALTHY on a Speaches that
+      # could not serve a single transcription. The router then health-checked it,
+      # got a 404 per job, and fell back to CPU — a silent 5-10x slowdown with a
+      # 200 response and no error anywhere. Grep for the model id so an empty
+      # Speaches shows up as unhealthy instead.
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:8001/v1/models | grep -q "${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}"
       interval: 30s
       timeout: 5s
-      # First boot downloads ~3 GB (large-v3) via PRELOAD_MODELS; keep the
+      # First boot downloads ~3 GB (large-v3) via speaches-model-init; keep the
       # container out of "unhealthy" while that runs.
       start_period: 900s
       retries: 3
+
+  # B-005: restores the "a fresh deploy needs no manual pull" behavior that
+  # PRELOAD_MODELS was supposed to provide and silently stopped providing.
+  # One-shot: waits for the API, exits immediately if the model is already
+  # cached, otherwise POSTs the download endpoint (which does work) and verifies
+  # the result. Idempotent, so it is a no-op on every subsequent `up`.
+  speaches-model-init:
+    image: curlimages/curl:8.11.1
+    container_name: transcribe-svc-speaches-init
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      speaches:
+        # service_started, not service_healthy — the healthcheck above now
+        # requires the model, which is precisely what this service downloads.
+        # Waiting for healthy would deadlock.
+        condition: service_started
+    network_mode: service:tailscale
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        MODEL="$${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}"
+        echo "speaches-model-init: target model = $$MODEL"
+        # Wait for the Speaches API (first boot loads before it answers).
+        i=0
+        while [ "$$i" -lt 120 ]; do
+          if curl -fsS -m 5 http://127.0.0.1:8001/v1/models >/dev/null 2>&1; then break; fi
+          i=$$((i + 1)); sleep 5
+        done
+        if ! curl -fsS -m 5 http://127.0.0.1:8001/v1/models >/dev/null 2>&1; then
+          echo "speaches-model-init: API never came up; leaving model unfetched." >&2
+          echo "speaches will report unhealthy and the ASR router will use CPU." >&2
+          exit 1
+        fi
+        if curl -fsS http://127.0.0.1:8001/v1/models | grep -q "$$MODEL"; then
+          echo "speaches-model-init: already cached, nothing to do."
+          exit 0
+        fi
+        echo "speaches-model-init: downloading $$MODEL (~3 GB, several minutes)..."
+        curl -fsS --max-time 3600 -X POST "http://127.0.0.1:8001/v1/models/$$MODEL" || true
+        if curl -fsS http://127.0.0.1:8001/v1/models | grep -q "$$MODEL"; then
+          echo "speaches-model-init: done, model is cached."
+        else
+          echo "speaches-model-init: FAILED to fetch $$MODEL." >&2
+          exit 1
+        fi
+    environment:
+      ASR_MODEL_ID: ${ASR_MODEL_ID:-Systran/faster-whisper-large-v3}
 
   diarize-svc:
     container_name: transcribe-svc-diarize
