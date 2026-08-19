@@ -117,7 +117,7 @@ Health check: `HEAD /health` (or `GET /health`) with 2 s timeout per host. On fi
 
 ## 6. What changes, what doesn't
 
-**Unchanged (contract stability for TesterClaw T4.0 target and iPhone client):**
+**Unchanged (contract stability for the T4.0 test target and iPhone client):**
 
 - `POST /v1/transcribe` request shape
 - `GET /v1/results/{id}/transcript.{txt,json}` URLs
@@ -178,12 +178,12 @@ Adapted from `PROJECT_PLAN.md` §6 Phase 3, tightened to this design:
 - This service transcribes therapy sessions. Content is PHI.
 - Speaches receives raw audio bytes. Speaches must **only** run on the Alienware inside the operator's tailnet. No outbound telemetry (`SPEACHES_ANALYTICS=false` if such a knob exists — will confirm during implementation).
 - `RETAIN_DAYS=30` behavior unchanged.
-- **TesterClaw runs only against a clean instance with synthetic audio**, never against one holding real recordings — same rule as 2026-07-11.
+- **The test harness runs only against a clean instance with synthetic audio**, never against one holding real recordings — same rule as 2026-07-11.
 
 ## 10. Rollback / escape hatch
 
 - All Phase 3 work stays on `phase-3-gpu` branch until acceptance gate is met and operator approves merge.
-- `main` continues to ship the Phase 2 CPU state that the TesterClaw T4.0 target depends on. Nothing on `main` is broken by this work.
+- `main` continues to ship the Phase 2 CPU state that the T4.0 test target depends on. Nothing on `main` is broken by this work.
 - If Phase 3 stalls or is abandoned, deleting the branch loses only speculative work.
 - A pointer entry on `main`'s `docs/STATUS.md` documents the branch's existence so `main` isn't blind to it.
 

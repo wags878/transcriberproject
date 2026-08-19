@@ -160,9 +160,9 @@ Phase 0 §6 acceptance item (`lscpu | grep -i avx512` returns flags) is now **fu
 
 ---
 
-## 2026-07-11 — GPU inference path + selected as TesterClaw's second test target
+## 2026-07-11 — GPU inference path + selected as a test harness's second target
 
-Cross-project session (FamilyOS/TesterClaw coordination chat). Nothing in this repo changed;
+Cross-project session (private planning repo coordination chat). Nothing in this repo changed;
 this entry records decisions and constraints that land on transcribe-svc.
 
 **Done / decided:**
@@ -182,10 +182,10 @@ this entry records decisions and constraints that land on transcribe-svc.
     Paravirtualized workarounds (krunkit/libkrun + Mesa Venus + MoltenVK) are Vulkan-compute
     only and slow. Apple `container` is still fine for the *non-GPU* containers.
 
-- **transcribe-svc is now TesterClaw Plan C **T4.0** — the second-project genericity proof.**
+- **transcribe-svc is now the test harness's Plan C **T4.0** — the second-project genericity proof.**
   Chosen over `ah-helpdesk` because it is the operator's own, domain-agnostic project with no
   IP entanglement (ah-project is frozen pending an employment-agreement/counsel check).
-  - **It is API-only — no web UI.** TesterClaw's browser/UX persona runner (pages, DOM,
+  - **It is API-only — no web UI.** The harness's browser/UX persona runner (pages, DOM,
     localStorage, axe, screenshots) **cannot crawl it.** It will be tested with TC's **API
     persona runner** via `openapi_spec_url` (FastAPI serves `/openapi.json`) +
     `auth_strategy: bearer_register_login`. **This is a stronger genericity proof** — a
@@ -194,20 +194,20 @@ this entry records decisions and constraints that land on transcribe-svc.
     runner may only speak JSON. If it can't upload, probing auth/401s/error handling/
     content-type validation is still a valid proof.
 
-**🚨 HARD CONSTRAINT — PHI (read before any TesterClaw run against this service):**
+**🚨 HARD CONSTRAINT — PHI (read before any automated test run against this service):**
 
 This service transcribes **therapy sessions** (`docs/STATUS.md` success bar: *"works for a
 60-minute therapy session"*). That content is **PHI**, and psychotherapy material carries
 heightened protection under HIPAA. `RETAIN_DAYS=30` means transcripts persist on disk.
 
-**TesterClaw must ONLY ever be pointed at a clean instance — empty output dir, SYNTHETIC
+**The test harness must ONLY ever be pointed at a clean instance — empty output dir, SYNTHETIC
 audio only (e.g. a ~30-second nonsense clip). NEVER at an instance holding real recordings or
 transcripts.** Personas hitting endpoints that return or reference transcript content would
-pull PHI into TesterClaw's findings store and potentially out to frontier models.
+pull PHI into the harness's findings store and potentially out to frontier models.
 
 This is the "**eliminate the exposure, don't just detect it**" layer (L0) from
-`FamilyOS/plans/TESTERCLAW_ML_AND_INFERENCE_ROADMAP.md` §3, and the portfolio-wide
-**layered-defense** principle in `FamilyOS/PROJECT_PLAN.md` → Standing decisions.
+the private planning repo's ML and inference roadmap §3, and the portfolio-wide
+**layered-defense** principle in its `PROJECT_PLAN.md` → Standing decisions.
 
 **Watch item — licensing (not a blocker):**
 

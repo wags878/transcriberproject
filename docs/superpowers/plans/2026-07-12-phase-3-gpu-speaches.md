@@ -31,7 +31,7 @@
 - `docs/DEPLOY.md` — Windows 11 + WSL2 + Docker Desktop section.
 - `docs/API.md` — brief note on the new `ASR_BACKEND` behavior.
 
-**Untouched (contract stability for TesterClaw T4.0 + iPhone client):**
+**Untouched (contract stability for the T4.0 test target + iPhone client):**
 - `app/main.py` (all routes), `app/auth.py`, `app/storage.py`, `app/schemas.py`
 - Request/response shapes
 - URL patterns
