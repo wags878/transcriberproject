@@ -50,7 +50,8 @@ repository:
 
   * Several model weights are GATED on HuggingFace: you must accept the
     publisher's conditions under your own account before they will download.
-    Accepting those conditions is a decision only you can make.
+    Approval is automatic and immediate — there is no manual review queue — but
+    accepting those conditions is still a decision only you can make.
 
 ================================================================================
 MODEL WEIGHTS (downloaded at runtime; NOT redistributed here)
