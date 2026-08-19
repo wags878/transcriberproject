@@ -80,13 +80,21 @@ cd transcriberproject
 cp .env.example .env
 ```
 
-Set a token in `.env`:
+Generate an API token:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Paste it as `API_TOKEN`, then bring the stack up:
+Paste it into `.env` as `API_TOKEN`.
+
+**You also need a HuggingFace token.** The diarization models are gated, so the
+download fails without one. Accept the conditions for
+[speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1),
+create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens),
+and set it as `HF_TOKEN`.
+
+Then bring the stack up:
 
 ```bash
 docker compose up -d
@@ -209,7 +217,8 @@ each one inline. The settings you are most likely to touch:
 | `WHISPERX_DEVICE` | `cpu` | `cpu` or `cuda` |
 | `ASR_BACKEND` | `whisperx` | `whisperx` (in-process) or `router` (try `ASR_HOSTS` in order) |
 | `DIARIZE_BACKEND` | `local` | `local` (in-process CPU) or `remote` (GPU sidecar) |
-| `DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | Open model by default; the gated `3.1` needs `HF_TOKEN` |
+| `DIARIZATION_MODEL` | `pyannote/speaker-diarization-community-1` | Both supported models are gated on HuggingFace |
+| `HF_TOKEN` | — | Required — an account that accepted the model's conditions |
 | `MAX_CONCURRENT_JOBS` | `1` | Hard cap on simultaneous jobs |
 | `RETAIN_DAYS` | `30` | Retention sweep on container start; negative disables |
 | `ENABLE_ROLE_LABELS` | `0` | Opt-in speaker naming via voice enrollment |
@@ -332,8 +341,19 @@ Security issues go through [private reporting](SECURITY.md), not public issues.
 This project depends on third-party components under their own licenses — see
 [NOTICE](NOTICE). Model weights are downloaded at runtime and are **not**
 redistributed here; their licenses apply to you directly as the party
-downloading them. Speaker diarization is powered by pyannoteAI's
-`speaker-diarization-community-1` model, licensed CC-BY-4.0.
+downloading them.
+
+Two components are CC-BY-4.0 and **require attribution if you deploy this**:
+
+> Speaker diarization powered by pyannoteAI's `speaker-diarization-community-1`
+> model, licensed CC-BY-4.0.
+
+> Speaker embeddings computed with `pyannote/wespeaker-voxceleb-resnet34-LM`,
+> licensed CC-BY-4.0.
+
+The second applies only when `ENABLE_ROLE_LABELS=1`. [NOTICE](NOTICE) carries the
+full component list, the gating status of each model, and the citations the
+pyannote authors request.
 
 [whisperx]: https://github.com/m-bain/whisperX
 [pyannote]: https://github.com/pyannote/pyannote-audio
