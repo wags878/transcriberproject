@@ -564,7 +564,7 @@ the first chunk of the session to discover.
 | Doc claim | Reality on 2026-08-14 |
 |---|---|
 | Stack deployed and healthy on the Alienware | No images/containers/volumes at all |
-| Repo at `<folder>/transcriberproject` | `C:\Users\<user>\Github\transcriberproject` |
+| Repo at `Github/<folder>/transcriberproject` | `C:\Users\<user>\Github\transcriberproject` |
 | Reachable at `transcribe-svc.<tailnet>.ts.net` | Name held by a stale node; new node is `transcribe-svc-1` |
 | `PRELOAD_MODELS` prevents the empty-Speaches trap | Silently ignored by the image (**B-005**) |
 

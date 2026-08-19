@@ -1,0 +1,70 @@
+name: Bug report
+description: Something is not working as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach real audio, real transcripts, or real voice enrollments.**
+        This project handles patient↔provider conversations. If you need a
+        reproduction clip, use one from `samples/` or generate a synthetic one
+        with `ml/synth/`. Redact anything identifying before pasting logs.
+
+        Security problems go through
+        [private reporting](https://github.com/wags878/transcriberproject/security/advisories/new),
+        not this form.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cp .env.example .env, set API_TOKEN
+        2. docker compose up -d
+        3. curl ... samples/quick_qa.mp3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Compose profile
+      options:
+        - CPU (docker-compose.yml)
+        - GPU (docker-compose.gpu.yml)
+        - Neither — running the app directly
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth-mode
+    attributes:
+      label: AUTH_MODE
+      options: [static, hybrid, oidc]
+    validations:
+      required: true
+
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Transcript header fields
+      description: >
+        If this is about speed or quality, paste `asr_backend`, `device`, and
+        `diarize_device` from the JSON output. A cold GPU model load looks like
+        a CPU fallback and is not one.
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from `docker compose logs`. Redact first.
+      render: shell

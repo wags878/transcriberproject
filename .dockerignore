@@ -1,0 +1,60 @@
+# Keep the build context small and, more importantly, keep secrets and
+# biometric data out of it.
+#
+# The Dockerfiles use targeted COPY rather than `COPY . .`, so most of this is
+# defense in depth — but ml/Dockerfile does `COPY ml/ ./ml/`, which without the
+# enrollment rules below would bake local voiceprints into the image.
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+*.token
+tokens.json
+
+# --- Biometric voiceprints: NEVER put these in an image ---
+ml/enroll/enrollments/
+enrollments/
+
+# --- Real audio / recordings / generated clips ---
+ml/synth/out/
+tests/fixtures/*.wav
+tests/fixtures/*.mp3
+tests/fixtures/*.m4a
+tests/fixtures/*.flac
+uploads/
+outputs/
+/data/
+
+# --- VCS and CI ---
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.coverage
+htmlcov/
+
+# --- Models (downloaded at runtime into a volume, not baked in) ---
+models/
+
+# --- Editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Docs and build artifacts not needed at runtime ---
+docs/
+*.tar

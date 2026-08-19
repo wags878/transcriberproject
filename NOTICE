@@ -1,9 +1,27 @@
 transcribe-svc
-Copyright (c) 2026 The Operator. All rights reserved.
+Copyright 2026 transcribe-svc contributors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+--------------------------------------------------------------------------------
 
 This product incorporates and depends on the following third-party components.
-Each is used under its own license; the project itself remains proprietary
-(see LICENSE).
+Each remains under its own license, which governs that component regardless of
+the Apache-2.0 license covering this project's own source.
+
+Note on model weights: the diarization and speaker-embedding models are
+downloaded at runtime from HuggingFace and are NOT redistributed in this
+repository. Their licenses (and, for gated models, their user agreements) apply
+to you directly as the party downloading them.
 
 ================================================================================
 WhisperX (https://github.com/m-bain/whisperX)

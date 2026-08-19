@@ -17,7 +17,7 @@ in production. This is that re-sweep.
 | Cluster | Actually who | Cosine | Genuine? |
 |---|---|---:|:---:|
 | `SPEAKER_00` | Speaker A | **0.7176** | ✅ yes |
-| `SPEAKER_01` | Speaker A (diarization split him in two) | **0.5899** | ✅ yes |
+| `SPEAKER_01` | Speaker A (diarization split them in two) | **0.5899** | ✅ yes |
 | `SPEAKER_02` | Speaker B — *"¿Dónde está el baño?"* | **0.1282** | no (true impostor) |
 
 ## Separation
@@ -56,7 +56,7 @@ risk on real audio is **false negatives** (no label), not false positives
 An initial run scored only two clusters and read `0.6113` as the impostor,
 implying a 0.126 gap and prompting a threshold of 0.65. That cluster was **Speaker A**,
 not Speaker B. The mistake was possible because the probe clip's first transcription
-never surfaced Speaker B at all — his Spanish went untranscribed, so the only two
+never surfaced Speaker B at all — their Spanish went untranscribed, so the only two
 clusters available were both Speaker A, and the "impostor" was a genuine sample.
 
 Speaker B appeared only after re-running the clip as WAV, which produced three speakers
